@@ -1,0 +1,69 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:${DATA_ROOT:-/data}
+      # İhtiyacınız kadar medya mount satırı ekleyin/silin.
+      - ./media/filmler:/media/filmler:ro
+      - ./media/diziler:/media/diziler:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m video_converter.worker.main
+    # WORKER_CONCURRENCY controls how many jobs are processed concurrently.
+    # Default is 1 (single-threaded, backward-compatible).
+    # Increase cautiously on resource-constrained devices like Raspberry Pi.
+    # Example: WORKER_CONCURRENCY=2
+    env_file:
+      - .env
+    volumes:
+      - ./data:${DATA_ROOT:-/data}
+      # İhtiyacınız kadar medya mount satırı ekleyin/silin.
+      - ./media/filmler:/media/filmler:ro
+      - ./media/diziler:/media/diziler:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+    restart: unless-stopped
