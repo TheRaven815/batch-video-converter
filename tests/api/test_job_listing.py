@@ -154,7 +154,9 @@ def test_list_jobs_filters_source_type_and_hides_archived(monkeypatch: Any) -> N
     ordered_ids = ["legacy-1", "server-1", "archived-1"]
     records = {
         "legacy-1": _make_job("legacy-1", JobStatus.queued),
-        "server-1": _make_job("server-1", JobStatus.queued, source_root_key="filmler", source_path="clip.mp4"),
+        "server-1": _make_job(
+            "server-1", JobStatus.queued, source_root_key="filmler", source_path="clip.mp4"
+        ),
         "archived-1": _make_job("archived-1", JobStatus.completed, archived=True),
     }
 

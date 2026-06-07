@@ -66,7 +66,9 @@ def test_source_payload_rejects_non_video_extension(tmp_path: Path, monkeypatch:
     assert exc.value.status_code == 422
 
 
-def test_source_payload_accepts_valid_video_and_build_job_infers_name(tmp_path: Path, monkeypatch: Any) -> None:
+def test_source_payload_accepts_valid_video_and_build_job_infers_name(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     media_root = tmp_path / "media"
     media_root.mkdir(parents=True)
     video_file = media_root / "clip.mkv"

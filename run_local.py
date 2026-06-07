@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 DEFAULT_DATA_ROOT = "./data"
@@ -38,10 +37,14 @@ def parse_args() -> argparse.Namespace:
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--api-only", action="store_true", help="Start only the FastAPI server.")
-    mode.add_argument("--worker-only", action="store_true", help="Start only the Redis/FFmpeg worker.")
+    mode.add_argument(
+        "--worker-only", action="store_true", help="Start only the Redis/FFmpeg worker."
+    )
     parser.add_argument("--host", default="0.0.0.0", help="API host bind address. Default: 0.0.0.0")
     parser.add_argument("--port", type=int, default=8000, help="API port. Default: 8000")
-    parser.add_argument("--no-browser", action="store_true", help="Do not open the local UI in a browser.")
+    parser.add_argument(
+        "--no-browser", action="store_true", help="Do not open the local UI in a browser."
+    )
     parser.add_argument(
         "--storage",
         choices=("local", "redis"),
@@ -185,12 +188,14 @@ def check_port_available(host: str, port: int) -> None:
             ]
             if occupier:
                 lines.append(f"Occupying process: {occupier}")
-            lines.extend([
-                "Another application is already listening on this port.",
-                "Options:",
-                f"  - Stop the other process and retry",
-                f"  - Use a different port:  python run_local.py --port 8001",
-            ])
+            lines.extend(
+                [
+                    "Another application is already listening on this port.",
+                    "Options:",
+                    "  - Stop the other process and retry",
+                    "  - Use a different port:  python run_local.py --port 8001",
+                ]
+            )
             raise LauncherError("\n".join(lines))
 
 
@@ -209,7 +214,9 @@ def build_frontend() -> None:
     frontend_dir = PROJECT_ROOT / "frontend"
     npm_executable = shutil.which("npm.cmd" if os.name == "nt" else "npm") or shutil.which("npm")
     if npm_executable is None:
-        raise LauncherError("npm was not found on PATH. Install Node.js/npm before running the local launcher.")
+        raise LauncherError(
+            "npm was not found on PATH. Install Node.js/npm before running the local launcher."
+        )
 
     commands = [
         [npm_executable, "ci"],
@@ -221,7 +228,9 @@ def build_frontend() -> None:
         try:
             subprocess.run(command, cwd=frontend_dir, check=True)
         except subprocess.CalledProcessError as exc:
-            raise LauncherError(f"Frontend command failed with exit code {exc.returncode}: {display_command}") from exc
+            raise LauncherError(
+                f"Frontend command failed with exit code {exc.returncode}: {display_command}"
+            ) from exc
 
     print("[ok] Fresh frontend build completed at frontend/dist.")
 
@@ -233,9 +242,13 @@ def warn_for_missing_frontend_build() -> None:
         return
 
     print("[warning] Built frontend was not found at frontend/dist/index.html.")
-    print("          The API and worker can still start, but http://localhost:8000/ will return 404 until the UI is built.")
+    print(
+        "          The API and worker can still start, but http://localhost:8000/ will return 404 until the UI is built."
+    )
     print("          Build it locally with: cd frontend && npm install && npm run build")
-    print("          For frontend development, run Vite separately with: cd frontend && npm run dev")
+    print(
+        "          For frontend development, run Vite separately with: cd frontend && npm run dev"
+    )
 
 
 def check_redis(redis_url: str) -> None:
@@ -244,7 +257,9 @@ def check_redis(redis_url: str) -> None:
 
         client = redis.Redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
         client.ping()
-    except Exception as exc:  # noqa: BLE001 - startup diagnostics should show any Redis connection problem.
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - startup diagnostics should show any Redis connection problem.
         parsed = urlparse(redis_url)
         host = parsed.hostname or "localhost"
         port = parsed.port or 6379

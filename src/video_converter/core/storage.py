@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
@@ -52,6 +51,7 @@ class LocalFileStore:
 
     def __init__(self, path: Path) -> None:
         import threading as _threading
+
         self.path = path.resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
@@ -61,7 +61,10 @@ class LocalFileStore:
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
             self._conn = sqlite3.connect(
-                str(self.path), timeout=30, isolation_level=None, check_same_thread=False,
+                str(self.path),
+                timeout=30,
+                isolation_level=None,
+                check_same_thread=False,
             )
             self._configure_connection(self._conn)
         return self._conn
@@ -92,7 +95,9 @@ class LocalFileStore:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS lists (key TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (key, position))"
                 )
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_lists_key_position ON lists(key, position)")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_lists_key_position ON lists(key, position)"
+                )
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -156,8 +161,13 @@ class LocalFileStore:
             self._begin_write(conn)
             try:
                 next_position = self._next_position(conn, key)
-                conn.execute("INSERT INTO lists(key, position, value) VALUES(?, ?, ?)", (key, next_position, value))
-                length = conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
+                conn.execute(
+                    "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                    (key, next_position, value),
+                )
+                length = conn.execute(
+                    "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
+                ).fetchone()[0]
                 conn.execute("COMMIT")
                 return int(length)
             except Exception:
@@ -166,7 +176,9 @@ class LocalFileStore:
 
     def lrange(self, key: str, start: int, end: int) -> list[str]:
         with self._lock, self._connect() as conn:
-            count = int(conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0])
+            count = int(
+                conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
+            )
 
             if count == 0:
                 return []
@@ -198,13 +210,18 @@ class LocalFileStore:
 
     def llen(self, key: str) -> int:
         with self._lock, self._connect() as conn:
-            return int(conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0])
+            return int(
+                conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
+            )
 
     def lrem(self, key: str, count: int, value: str) -> int:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
-                rows = conn.execute("SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC", (key, value)).fetchall()
+                rows = conn.execute(
+                    "SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC",
+                    (key, value),
+                ).fetchall()
                 positions = [int(row[0]) for row in rows]
                 if count > 0:
                     positions = positions[:count]
@@ -212,7 +229,10 @@ class LocalFileStore:
                     positions = list(reversed(positions))[0 : abs(count)]
                 if positions:
                     placeholders = ",".join("?" for _ in positions)
-                    conn.execute(f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})", (key, *positions))
+                    conn.execute(
+                        f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})",
+                        (key, *positions),
+                    )
                 conn.execute("COMMIT")
                 return len(positions)
             except Exception:
@@ -229,14 +249,19 @@ class LocalFileStore:
                 return None
             time.sleep(0.25)
 
-    def pipeline(self, transaction: bool = True) -> LocalPipeline:  # noqa: ARG002 - mirrors redis-py API.
+    def pipeline(
+        self, transaction: bool = True
+    ) -> LocalPipeline:  # noqa: ARG002 - mirrors redis-py API.
         return LocalPipeline(self)
 
     def _lpop(self, key: str) -> str | None:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
-                row = conn.execute("SELECT position, value FROM lists WHERE key = ? ORDER BY position ASC LIMIT 1", (key,)).fetchone()
+                row = conn.execute(
+                    "SELECT position, value FROM lists WHERE key = ? ORDER BY position ASC LIMIT 1",
+                    (key,),
+                ).fetchone()
                 if row is None:
                     conn.execute("COMMIT")
                     return None
@@ -249,7 +274,9 @@ class LocalFileStore:
                 raise
 
     def _next_position(self, conn: sqlite3.Connection, key: str) -> int:
-        row = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM lists WHERE key = ?", (key,)).fetchone()
+        row = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM lists WHERE key = ?", (key,)
+        ).fetchone()
         return int(row[0])
 
     def _execute_pipeline(self, operations: Iterable[tuple[str, tuple[Any, ...]]]) -> list[Any]:
@@ -269,12 +296,20 @@ class LocalFileStore:
                     elif name == "rpush":
                         key, value = args
                         next_position = self._next_position(conn, str(key))
-                        conn.execute("INSERT INTO lists(key, position, value) VALUES(?, ?, ?)", (key, next_position, value))
-                        length = conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
+                        conn.execute(
+                            "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                            (key, next_position, value),
+                        )
+                        length = conn.execute(
+                            "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
+                        ).fetchone()[0]
                         results.append(int(length))
                     elif name == "lrem":
                         key, count, value = args
-                        rows = conn.execute("SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC", (key, value)).fetchall()
+                        rows = conn.execute(
+                            "SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC",
+                            (key, value),
+                        ).fetchall()
                         positions = [int(row[0]) for row in rows]
                         if count > 0:
                             positions = positions[: int(count)]
@@ -282,7 +317,10 @@ class LocalFileStore:
                             positions = list(reversed(positions))[0 : abs(int(count))]
                         if positions:
                             placeholders = ",".join("?" for _ in positions)
-                            conn.execute(f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})", (key, *positions))
+                            conn.execute(
+                                f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})",
+                                (key, *positions),
+                            )
                         results.append(len(positions))
                     elif name == "delete":
                         (key,) = args

@@ -82,14 +82,14 @@ cp .env.example .env
 
 ```bat
 mkdir data
-mkdir media\filmler
-mkdir media\diziler
+mkdir media\Movies
+mkdir media\Series
 ```
 
 On Linux/macOS:
 
 ```sh
-mkdir -p data media/filmler media/diziler
+mkdir -p data media/Movies media/Series
 ```
 
 3. Start the stack:
@@ -163,7 +163,7 @@ Default local settings used by `run_local.py` when environment variables are not
 VIDEO_CONVERTER_STORAGE=local
 REDIS_URL=redis://localhost:6379/0
 DATA_ROOT=./data
-MEDIA_MOUNTS=Movies=./media/filmler;Series=./media/diziler
+MEDIA_MOUNTS=Movies=./media/Movies;Series=./media/Series
 ```
 
 In `local` mode, Redis is not required. Job records and queue state are stored in a SQLite-backed file such as `DATA_ROOT/data/local_queue.sqlite3`. FFmpeg and ffprobe are still required for real conversions.
@@ -218,7 +218,7 @@ MEDIA_MOUNTS=Media=/data/input
 - `worker` runs `python -m video_converter.worker.main`.
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
 - `./data` is mounted to `${DATA_ROOT:-/data}` for API and worker.
-- Example media mounts are read-only: `./media/filmler:/media/filmler:ro` and `./media/diziler:/media/diziler:ro`.
+- Example media mounts are read-only: `./media/Movies:/media/Movies:ro` and `./media/Series:/media/Series:ro`.
 
 When adding media roots, update both places together:
 
@@ -343,6 +343,20 @@ Install development dependencies first:
 pip install -r requirements-dev.txt
 ```
 
+Run Python lint and format checks:
+
+```sh
+ruff check .
+black --check .
+```
+
+Format Python code automatically when needed:
+
+```sh
+ruff check . --fix
+black .
+```
+
 Run all backend tests:
 
 ```sh
@@ -388,6 +402,7 @@ docker compose up --build
 |-- docker-compose.coolify.yml        # Coolify-oriented Compose stack
 |-- .env.example                      # Local/Docker environment template
 |-- .env.coolify.example              # Coolify environment template
+|-- pyproject.toml                    # Python tool config for Black and Ruff
 |-- pytest.ini                        # pytest config with pythonpath=src
 |-- requirements.txt                  # Runtime Python dependencies
 |-- requirements-dev.txt              # Runtime + test dependencies

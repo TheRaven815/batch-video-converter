@@ -60,7 +60,6 @@ class _FakeJobRepository:
         return 0
 
 
-
 def _make_job(job_id: str, status: JobStatus) -> JobRecord:
     ts = now_iso()
     return JobRecord(
@@ -111,7 +110,9 @@ def test_start_jobs_bulk_skips_invalid_states_and_requeues_restartable(monkeypat
     assert skip_map["missing"] == "Job not found"
 
 
-def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(monkeypatch: Any) -> None:
+def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
+    monkeypatch: Any,
+) -> None:
     fake_repository = _FakeJobRepository()
     fake_repository.queue = ["queued-1", "other"]
 

@@ -83,7 +83,6 @@ def _parse_media_roots(raw_value: str, *, input_dir: Path) -> tuple[MediaRoot, .
     return tuple(roots)
 
 
-
 def get_settings() -> Settings:
     data_root = Path(os.getenv("DATA_ROOT", "/data"))
     input_dir = data_root / "input"

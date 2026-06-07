@@ -4,7 +4,6 @@ from pathlib import Path
 
 from video_converter.core.config import _derive_key_from_label, _parse_media_roots
 
-
 # ---------------------------------------------------------------------------
 # _derive_key_from_label
 # ---------------------------------------------------------------------------

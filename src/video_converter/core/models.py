@@ -39,6 +39,7 @@ class JobRecord(BaseModel):
     def _normalize_legacy_status(cls, value: str) -> str:
         """Normalize legacy 'processing' status to 'running' for backward compatibility."""
         return "running" if value == "processing" else value
+
     profile: str
     video_export: str = Field(default="mp4", max_length=16)
     audio_export: str = Field(default="copy", max_length=16)

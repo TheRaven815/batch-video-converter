@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import signal
 import subprocess
 import threading
@@ -15,9 +14,9 @@ import redis
 
 from video_converter.core.config import QUEUE_NAME, ensure_runtime_dirs, get_settings
 from video_converter.core.job_repository import DEFAULT_STALE_RUNNING_SECONDS, JobRepository
+from video_converter.core.models import JobStatus
 from video_converter.core.path_validation import validate_source_path
 from video_converter.core.storage import create_storage_client, is_redis_storage
-from video_converter.core.models import JobStatus
 
 settings = get_settings()
 ensure_runtime_dirs(settings)
@@ -43,6 +42,7 @@ class JobAdapter(logging.LoggerAdapter):
 # ---------------------------------------------------------------------------
 # Graceful shutdown manager
 # ---------------------------------------------------------------------------
+
 
 class _ShutdownManager:
     """Tracks active FFmpeg processes and in-progress job IDs for graceful shutdown.
@@ -100,14 +100,14 @@ class _ShutdownManager:
             return
 
         logger.info("terminating %d active FFmpeg process(es)", len(procs), extra={"job_id": "-"})
-        for job_id, proc in procs.items():
+        for _job_id, proc in procs.items():
             try:
                 proc.terminate()
             except OSError:
                 pass
 
         deadline = time.monotonic() + timeout
-        for job_id, proc in procs.items():
+        for _job_id, proc in procs.items():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 try:
@@ -140,9 +140,13 @@ class _ShutdownManager:
                         progress_message=message,
                         error=message,
                     )
-                    logger.info("marked running job as failed due to shutdown", extra={"job_id": job_id})
+                    logger.info(
+                        "marked running job as failed due to shutdown", extra={"job_id": job_id}
+                    )
             except Exception:
-                logger.exception("could not mark job as failed during shutdown", extra={"job_id": job_id})
+                logger.exception(
+                    "could not mark job as failed during shutdown", extra={"job_id": job_id}
+                )
 
     def graceful_shutdown(self, proc_timeout: float = 5.0) -> None:
         """Full graceful-shutdown sequence: terminate FFmpeg → fail remaining jobs."""
@@ -205,7 +209,9 @@ def _resolve_export_options(data: dict[str, Any]) -> tuple[str, str, str, str, s
 
     video_export = raw_video if raw_video in {"mp4", "mkv", "webm"} else legacy_video
     audio_export = raw_audio if raw_audio in {"copy", "aac", "mp3", "opus"} else legacy_audio
-    subtitle_export = raw_subtitle if raw_subtitle in {"none", "embedded", "separate_srt"} else "none"
+    subtitle_export = (
+        raw_subtitle if raw_subtitle in {"none", "embedded", "separate_srt"} else "none"
+    )
     subtitle_language = raw_subtitle_language if raw_subtitle_language else None
 
     # Container/codec uyumluluğu için profil normalizasyonu:
@@ -302,7 +308,9 @@ def _ffmpeg_command(
 
     if subtitle_export == "embedded":
         if subtitle_language:
-            cmd.extend(["-map", "0", "-map", "-0:s", "-map", f"0:s:m:language:{subtitle_language}?"])
+            cmd.extend(
+                ["-map", "0", "-map", "-0:s", "-map", f"0:s:m:language:{subtitle_language}?"]
+            )
         cmd.extend(["-c:s", "copy"])
 
     if output_path.suffix.lower() == ".mp4":
@@ -454,10 +462,14 @@ def _run_ffmpeg_with_progress(
                     "progress_out_time_seconds": processed_seconds,
                 }
                 if duration_seconds and processed_seconds is not None:
-                    percent = int(max(0.0, min(99.0, (processed_seconds / duration_seconds) * 100.0)))
+                    percent = int(
+                        max(0.0, min(99.0, (processed_seconds / duration_seconds) * 100.0))
+                    )
                     speed_value = _parse_speed_multiplier(snapshot.get("speed"))
                     if speed_value and speed_value > 0:
-                        telemetry["progress_eta_seconds"] = int(max(0.0, (duration_seconds - processed_seconds) / speed_value))
+                        telemetry["progress_eta_seconds"] = int(
+                            max(0.0, (duration_seconds - processed_seconds) / speed_value)
+                        )
                     job_repository.update_status(
                         job_id,
                         JobStatus.running,
@@ -543,7 +555,9 @@ def process_job(job_id: str) -> None:
 
         try:
             input_path = _resolve_input_path(data)
-            profile, video_export, audio_export, subtitle_export, subtitle_language = _resolve_export_options(data)
+            profile, video_export, audio_export, subtitle_export, subtitle_language = (
+                _resolve_export_options(data)
+            )
             output_path = _build_output_path(input_path, video_export, job_id)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -568,9 +582,16 @@ def process_job(job_id: str) -> None:
                 subtitle_language,
                 prefer_stream_copy_video=prefer_stream_copy_video,
             )
-            return_code, stderr_text = _run_ffmpeg_with_progress(job_id, cmd, duration_seconds=duration_seconds)
+            return_code, stderr_text = _run_ffmpeg_with_progress(
+                job_id, cmd, duration_seconds=duration_seconds
+            )
 
-            if return_code != 0 and prefer_stream_copy_video and not _is_cancel_requested(job_id) and not _shutdown.is_shutting_down:
+            if (
+                return_code != 0
+                and prefer_stream_copy_video
+                and not _is_cancel_requested(job_id)
+                and not _shutdown.is_shutting_down
+            ):
                 job_logger.warning("stream copy failed, falling back to re-encode")
                 job_repository.update_status(
                     job_id,
@@ -589,7 +610,9 @@ def process_job(job_id: str) -> None:
                     subtitle_language,
                     prefer_stream_copy_video=False,
                 )
-                return_code, stderr_text = _run_ffmpeg_with_progress(job_id, fallback_cmd, duration_seconds=duration_seconds)
+                return_code, stderr_text = _run_ffmpeg_with_progress(
+                    job_id, fallback_cmd, duration_seconds=duration_seconds
+                )
 
             if return_code == 130:
                 # Distinguish between cancel and shutdown
@@ -630,10 +653,15 @@ def process_job(job_id: str) -> None:
                     f"0:s:m:language:{subtitle_language}?" if subtitle_language else "0:s:0?",
                     str(subtitle_output),
                 ]
-                subtitle_proc = subprocess.run(subtitle_cmd, capture_output=True, text=True, check=False)
+                subtitle_proc = subprocess.run(
+                    subtitle_cmd, capture_output=True, text=True, check=False
+                )
                 if subtitle_proc.returncode != 0:
                     subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
-                    job_logger.warning("separate_srt export skipped: %s", subtitle_stderr or "subtitle stream not found")
+                    job_logger.warning(
+                        "separate_srt export skipped: %s",
+                        subtitle_stderr or "subtitle stream not found",
+                    )
 
             job_repository.update_status(
                 job_id,
@@ -746,7 +774,9 @@ def run() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
 
     try:
-        recovered = job_repository.recover_stale_running_jobs(stale_after_seconds=DEFAULT_STALE_RUNNING_SECONDS)
+        recovered = job_repository.recover_stale_running_jobs(
+            stale_after_seconds=DEFAULT_STALE_RUNNING_SECONDS
+        )
     except redis.RedisError:
         logger.exception("stale job recovery failed", extra={"job_id": "-"})
     except Exception:

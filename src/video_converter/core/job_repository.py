@@ -9,7 +9,6 @@ from redis import Redis
 from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
-
 DEFAULT_STALE_RUNNING_SECONDS = 60 * 60
 
 
@@ -136,7 +135,12 @@ class JobRepository:
         if previous_status != status or not timeline or timeline[-1].get("phase") != progress_phase:
             record.timeline = _append_limited(
                 timeline,
-                {"at": now, "status": status.value, "phase": progress_phase, "message": progress_message},
+                {
+                    "at": now,
+                    "status": status.value,
+                    "phase": progress_phase,
+                    "message": progress_message,
+                },
                 40,
             )
 
@@ -151,7 +155,9 @@ class JobRepository:
         self.persist(record)
         return record
 
-    def recover_stale_running_jobs(self, *, stale_after_seconds: int = DEFAULT_STALE_RUNNING_SECONDS) -> list[JobRecord]:
+    def recover_stale_running_jobs(
+        self, *, stale_after_seconds: int = DEFAULT_STALE_RUNNING_SECONDS
+    ) -> list[JobRecord]:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
         recovered: list[JobRecord] = []
 

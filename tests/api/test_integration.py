@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 import video_converter.api.main as api
-from video_converter.core.config import JOBS_INDEX_KEY, JOB_KEY_PREFIX, QUEUE_NAME, MediaRoot
+from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME, MediaRoot
 from video_converter.core.job_repository import JobRepository
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
@@ -51,10 +51,14 @@ class _FakeRedis:
             raise api.redis.RedisError("redis unavailable")
         return True
 
-    def pipeline(self, transaction: bool = True) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
+    def pipeline(
+        self, transaction: bool = True
+    ) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
         return _Pipeline(self)
 
-    def set(self, key: str, value: str, ex: int | None = None) -> bool:  # noqa: ARG002 - expiration not needed here.
+    def set(
+        self, key: str, value: str, ex: int | None = None
+    ) -> bool:  # noqa: ARG002 - expiration not needed here.
         self.values[key] = value
         return True
 
@@ -96,7 +100,9 @@ class _FakeRedis:
 
 
 @pytest.fixture()
-def integration_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _FakeRedis, Path]]:
+def integration_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[TestClient, _FakeRedis, Path]]:
     media_root = tmp_path / "media"
     outputs_dir = tmp_path / "outputs"
     data_root = tmp_path / "data"
@@ -164,7 +170,9 @@ def _persist_records(fake_redis: _FakeRedis, records: list[JobRecord]) -> None:
             fake_redis.rpush(QUEUE_NAME, record.id)
 
 
-def test_health_endpoints_report_liveness_and_readiness(integration_client: tuple[TestClient, _FakeRedis, Path]) -> None:
+def test_health_endpoints_report_liveness_and_readiness(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
     client, fake_redis, _media_root = integration_client
 
     live_response = client.get("/health/live")
@@ -185,7 +193,9 @@ def test_health_endpoints_report_liveness_and_readiness(integration_client: tupl
     assert degraded_ready_response.json()["error"]["code"] == "service_unavailable"
 
 
-def test_job_creation_get_and_list_flow(integration_client: tuple[TestClient, _FakeRedis, Path]) -> None:
+def test_job_creation_get_and_list_flow(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
     client, fake_redis, media_root = integration_client
     (media_root / "movie.mp4").write_text("video", encoding="utf-8")
 
@@ -288,7 +298,9 @@ def test_job_cancellation_marks_queued_job_cancelled_and_removes_queue_entry(
     assert fake_redis.lists[QUEUE_NAME] == []
 
 
-def test_media_roots_and_browse_flow(integration_client: tuple[TestClient, _FakeRedis, Path]) -> None:
+def test_media_roots_and_browse_flow(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
     client, _fake_redis, media_root = integration_client
     (media_root / "series").mkdir()
     (media_root / "series" / "episode.mkv").write_text("video", encoding="utf-8")
@@ -298,8 +310,12 @@ def test_media_roots_and_browse_flow(integration_client: tuple[TestClient, _Fake
 
     roots_response = client.get("/api/v1/media/roots")
     browse_response = client.get("/api/v1/media/browse", params={"root_key": "root"})
-    nested_response = client.get("/api/v1/media/browse", params={"root_key": "root", "path": "series"})
-    traversal_response = client.get("/api/v1/media/browse", params={"root_key": "root", "path": ".."})
+    nested_response = client.get(
+        "/api/v1/media/browse", params={"root_key": "root", "path": "series"}
+    )
+    traversal_response = client.get(
+        "/api/v1/media/browse", params={"root_key": "root", "path": ".."}
+    )
 
     assert roots_response.status_code == 200
     assert roots_response.json() == [{"key": "root", "label": "Root"}]
@@ -311,7 +327,9 @@ def test_media_roots_and_browse_flow(integration_client: tuple[TestClient, _Fake
     assert traversal_response.json()["error"]["code"] == "path_traversal_blocked"
 
 
-def test_bulk_actions_start_cancel_and_delete(integration_client: tuple[TestClient, _FakeRedis, Path]) -> None:
+def test_bulk_actions_start_cancel_and_delete(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
     client, fake_redis, _media_root = integration_client
     restartable = _make_job("failed-1", JobStatus.failed)
     queued = _make_job("queued-1", JobStatus.queued)

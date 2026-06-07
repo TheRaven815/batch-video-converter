@@ -44,7 +44,9 @@ def test_batch_request_rejects_empty_jobs() -> None:
         JobBatchCreateRequest(jobs=[])
 
 
-def test_create_jobs_batch_enqueues_all_records_in_single_repository_call(tmp_path: Path, monkeypatch: Any) -> None:
+def test_create_jobs_batch_enqueues_all_records_in_single_repository_call(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     media_root = tmp_path / "media"
     media_root.mkdir(parents=True)
     (media_root / "one.mp4").write_text("video", encoding="utf-8")
@@ -70,7 +72,9 @@ def test_create_jobs_batch_enqueues_all_records_in_single_repository_call(tmp_pa
     assert fake_repository.enqueued_batches == [[job.id for job in response.jobs]]
 
 
-def test_create_jobs_batch_reuses_idempotency_key_response(tmp_path: Path, monkeypatch: Any) -> None:
+def test_create_jobs_batch_reuses_idempotency_key_response(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     media_root = tmp_path / "media"
     media_root.mkdir(parents=True)
     (media_root / "one.mp4").write_text("video", encoding="utf-8")
@@ -81,7 +85,9 @@ def test_create_jobs_batch_reuses_idempotency_key_response(tmp_path: Path, monke
     monkeypatch.setattr(api, "job_repository", fake_repository)
     monkeypatch.setattr(api, "storage_client", fake_redis)
 
-    payload = JobBatchCreateRequest(jobs=[JobCreateRequest(source_root_key="root", source_path="one.mp4")])
+    payload = JobBatchCreateRequest(
+        jobs=[JobCreateRequest(source_root_key="root", source_path="one.mp4")]
+    )
 
     first = api.create_jobs_batch(payload, idempotency_key="repeat-click")
     second = api.create_jobs_batch(payload, idempotency_key="repeat-click")

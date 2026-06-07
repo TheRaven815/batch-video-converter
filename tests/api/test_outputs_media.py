@@ -28,7 +28,9 @@ class _FakeCompletedProcess:
         )
 
 
-def _patch_settings(monkeypatch: Any, *, media_root: Path | None = None, outputs_dir: Path | None = None) -> None:
+def _patch_settings(
+    monkeypatch: Any, *, media_root: Path | None = None, outputs_dir: Path | None = None
+) -> None:
     monkeypatch.setattr(
         api,
         "settings",
@@ -36,7 +38,9 @@ def _patch_settings(monkeypatch: Any, *, media_root: Path | None = None, outputs
             "_S",
             (),
             {
-                "media_roots": (MediaRoot(key="root", label="Root", path=media_root),) if media_root else (),
+                "media_roots": (
+                    (MediaRoot(key="root", label="Root", path=media_root),) if media_root else ()
+                ),
                 "outputs_dir": outputs_dir,
             },
         )(),

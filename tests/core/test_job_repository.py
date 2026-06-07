@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME
+from video_converter.core.config import JOBS_INDEX_KEY, QUEUE_NAME
 from video_converter.core.job_repository import JobRepository
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
@@ -72,7 +72,9 @@ class _FakeRedis:
         return 1 if existed else 0
 
 
-def _make_job(job_id: str, status: JobStatus, *, progress_updated_at: str | None = None) -> JobRecord:
+def _make_job(
+    job_id: str, status: JobStatus, *, progress_updated_at: str | None = None
+) -> JobRecord:
     ts = now_iso()
     return JobRecord(
         id=job_id,

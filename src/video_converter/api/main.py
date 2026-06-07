@@ -16,10 +16,12 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME, ensure_runtime_dirs, get_settings
+from video_converter.core.config import (
+    QUEUE_NAME,
+    ensure_runtime_dirs,
+    get_settings,
+)
 from video_converter.core.job_repository import DEFAULT_STALE_RUNNING_SECONDS, JobRepository
-from video_converter.core.path_validation import validate_source_path
-from video_converter.core.storage import create_storage_client, is_redis_storage
 from video_converter.core.models import (
     BatchCreateError,
     BatchListResponse,
@@ -47,6 +49,8 @@ from video_converter.core.models import (
     WorkerHealthResponse,
     now_iso,
 )
+from video_converter.core.path_validation import validate_source_path
+from video_converter.core.storage import create_storage_client, is_redis_storage
 
 settings = get_settings()
 ensure_runtime_dirs(settings)
@@ -60,7 +64,9 @@ logger = logging.getLogger("api")
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Startup: recover stale running jobs. Shutdown: no-op."""
     try:
-        recovered = job_repository.recover_stale_running_jobs(stale_after_seconds=DEFAULT_STALE_RUNNING_SECONDS)
+        recovered = job_repository.recover_stale_running_jobs(
+            stale_after_seconds=DEFAULT_STALE_RUNNING_SECONDS
+        )
     except redis.RedisError:
         logger.exception("stale job recovery failed")
     except Exception:
@@ -153,7 +159,9 @@ def _validate_source_payload(payload: JobCreateRequest) -> None:
     has_root = bool(payload.source_root_key)
     has_path = bool(payload.source_path)
     if has_root != has_path:
-        raise HTTPException(status_code=422, detail="source_root_key ve source_path birlikte verilmelidir")
+        raise HTTPException(
+            status_code=422, detail="source_root_key ve source_path birlikte verilmelidir"
+        )
 
     if not has_root:
         return
@@ -255,7 +263,9 @@ def validate_jobs(payload: JobBatchCreateRequest) -> JobValidationResponse:
             )
 
     valid_count = sum(1 for item in items if item.valid)
-    return JobValidationResponse(items=items, valid_count=valid_count, invalid_count=len(items) - valid_count)
+    return JobValidationResponse(
+        items=items, valid_count=valid_count, invalid_count=len(items) - valid_count
+    )
 
 
 def _idempotency_cache_key(idempotency_key: str) -> str:
@@ -276,10 +286,14 @@ def _load_idempotent_batch_response(idempotency_key: str | None) -> JobBatchCrea
         return None
 
 
-def _store_idempotent_batch_response(idempotency_key: str | None, response: JobBatchCreateResponse) -> None:
+def _store_idempotent_batch_response(
+    idempotency_key: str | None, response: JobBatchCreateResponse
+) -> None:
     if not idempotency_key:
         return
-    storage_client.set(_idempotency_cache_key(idempotency_key), response.model_dump_json(), ex=24 * 60 * 60)
+    storage_client.set(
+        _idempotency_cache_key(idempotency_key), response.model_dump_json(), ex=24 * 60 * 60
+    )
 
 
 def _validate_and_build_batch(
@@ -370,7 +384,9 @@ def _parse_status_filter(status: str | JobStatus | None) -> set[JobStatus] | Non
         try:
             statuses.add(JobStatus(value))
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=f"Geçersiz status filtresi: {value}") from exc
+            raise HTTPException(
+                status_code=422, detail=f"Geçersiz status filtresi: {value}"
+            ) from exc
 
     return statuses or None
 
@@ -429,7 +445,13 @@ def _matches_job_filters(
     if q:
         haystack = " ".join(
             str(part or "")
-            for part in [record.id, record.input_filename, record.source_path, record.output_filename, record.error_message]
+            for part in [
+                record.id,
+                record.input_filename,
+                record.source_path,
+                record.output_filename,
+                record.error_message,
+            ]
         ).lower()
         if q.lower() not in haystack:
             return False
@@ -521,13 +543,17 @@ def list_batches(
             continue
         grouped.setdefault(record.batch_id, []).append(record)
 
-    batches = [_batch_summary_from_records(batch_id, records) for batch_id, records in grouped.items()]
+    batches = [
+        _batch_summary_from_records(batch_id, records) for batch_id, records in grouped.items()
+    ]
     batches.sort(key=lambda batch: (batch.updated_at or "", batch.batch_id), reverse=True)
     selected = batches[cursor : cursor + limit]
     next_cursor = cursor + limit if cursor + limit < len(batches) else None
     if response is not None and next_cursor is not None:
         response.headers["X-Next-Cursor"] = str(next_cursor)
-    return BatchListResponse(batches=selected, next_cursor=str(next_cursor) if next_cursor is not None else None)
+    return BatchListResponse(
+        batches=selected, next_cursor=str(next_cursor) if next_cursor is not None else None
+    )
 
 
 @app.get("/api/v1/jobs/stream")
@@ -535,8 +561,14 @@ def stream_jobs() -> StreamingResponse:
     def _events():
         last_snapshot = ""
         while True:
-            records = [record for job_id in reversed(job_repository.list_ids()) if (record := _get_job_record(job_id)) and not record.archived]
-            snapshot = json.dumps([record.model_dump(mode="json") for record in records], sort_keys=True)
+            records = [
+                record
+                for job_id in reversed(job_repository.list_ids())
+                if (record := _get_job_record(job_id)) and not record.archived
+            ]
+            snapshot = json.dumps(
+                [record.model_dump(mode="json") for record in records], sort_keys=True
+            )
             timestamp = now_iso()
             if snapshot != last_snapshot:
                 yield f"event: jobs_snapshot\ndata: {json.dumps({'event': 'jobs_snapshot', 'timestamp': timestamp, 'data': {'jobs': [record.model_dump(mode='json') for record in records]}})}\n\n"
@@ -623,7 +655,9 @@ def list_outputs(
     ]
     if response is not None and next_cursor is not None:
         response.headers["X-Next-Cursor"] = str(next_cursor)
-    return OutputListResponse(outputs=outputs, next_cursor=str(next_cursor) if next_cursor is not None else None)
+    return OutputListResponse(
+        outputs=outputs, next_cursor=str(next_cursor) if next_cursor is not None else None
+    )
 
 
 @app.get("/api/v1/outputs/{filename}/download")
@@ -632,7 +666,6 @@ def download_output(filename: str) -> FileResponse:
     if not output_path.exists() or not output_path.is_file():
         raise HTTPException(status_code=404, detail="Output bulunamadı")
     return FileResponse(output_path, filename=output_path.name)
-
 
 
 def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:
