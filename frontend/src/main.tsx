@@ -504,20 +504,19 @@ function App() {
               <SummaryCard label="Running" value={summary.running} tone="running" />
               <SummaryCard label="Done" value={summary.completed} tone="completed" />
               <SummaryCard label="Failed" value={summary.failed} tone="failed" />
-              <SummaryCard label="Active" value={globalProgress} tone="running" suffix="%" />
             </div>
             <div className="dashboard-grid compact-dashboard-grid">
-              <section className="card active-card compact-active-card" aria-label="Active conversion progress">
+              <section className="card active-card compact-active-card" aria-label="Active conversion status">
                 <div className="active-compact-row">
-                  <div className="active-compact-copy"><span className="eyebrow">Active</span><strong>{runningJobs.length ? `${runningJobs.length} running` : 'Idle'}</strong><small>{activeJobs.length ? `${activeJobs.length} queued or active · ${globalProgress}% overall` : 'No running conversions'}</small></div>
-                  <div className="active-compact-meter"><div className="active-meter"><span style={{ width: `${globalProgress}%` }} /></div><b>{globalProgress}%</b></div>
+                  <div className="active-compact-copy"><span className="eyebrow">Active</span><strong>{runningJobs.length ? `${runningJobs.length} running` : 'Idle'}</strong><small>{activeJobs.length ? `${activeJobs.length} queued or active` : 'No running conversions'}</small></div>
+                  <div className="active-snapshot" aria-label="Current queue snapshot"><span><b>{globalProgress}%</b><small>overall</small></span><span><b>{workerHealth?.queue_depth ?? summary.queued}</b><small>queued</small></span><span><b>{workerHealth?.running_jobs ?? runningJobs.length}</b><small>worker</small></span></div>
                 </div>
                 {runningJobs.length ? <div className="mini-job-list compact-mini-list">{runningJobs.slice(0, 2).map((job) => <MiniJob key={job.id} job={job} onOpen={() => setSelectedJobId(job.id)} />)}</div> : <p className="active-idle-line">Queue activity will appear here when conversions start.</p>}
               </section>
               <section className="card batches-card compact-batches-card">
                 <CardHeader title="Recent batches" badge={`${batches.length} batches`} />
                 <div className="batch-list">
-                  {batches.length ? batches.slice(0, 6).map((batch) => <div className="batch-row" key={batch.batch_id}><strong>{batch.batch_id.slice(0, 8)}</strong><span>{batch.total} jobs · {batch.completed} done · {batch.failed} failed</span><div className="progress-line"><span style={{ width: `${batch.progress_percent}%` }} /></div></div>) : <EmptyState title="No batches yet" body="Create jobs in Convert." />}
+                  {batches.length ? batches.slice(0, 6).map((batch) => <div className="batch-row" key={batch.batch_id}><strong>{batch.batch_id.slice(0, 8)}</strong><span>{batch.total} jobs · {batch.completed} done · {batch.failed} failed</span><em>{batch.progress_percent}% batch progress</em></div>) : <EmptyState title="No batches yet" body="Create jobs in Convert." />}
                 </div>
               </section>
             </div>

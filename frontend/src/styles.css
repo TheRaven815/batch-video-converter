@@ -147,7 +147,7 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
 @keyframes refresh-spin { to { transform: rotate(360deg); } }
 @keyframes refresh-button-pulse { 0% { box-shadow: 0 0 0 0 rgba(57, 217, 138, 0.4); } 55% { box-shadow: 0 0 0 0.35rem rgba(57, 217, 138, 0.1); } 100% { box-shadow: 0 0 0 2px rgba(57, 217, 138, 0.14); } }
 
-.summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-2); }
+.summary-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-2); }
 .summary-card { position: relative; overflow: hidden; min-height: 4rem; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0.64rem 0.72rem; background: rgba(13, 20, 33, 0.74); box-shadow: none; }
 .summary-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--blue); opacity: 0.75; }
 .summary-card span { color: var(--muted); font-size: 0.68rem; font-weight: 720; }
@@ -167,10 +167,11 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
 .active-compact-copy strong, .active-compact-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .active-compact-copy strong { font-size: 1rem; letter-spacing: -0.03em; }
 .active-compact-copy small, .active-idle-line { color: var(--muted); font-size: 0.72rem; }
-.active-compact-meter { display: grid; grid-template-columns: minmax(0, 1fr) 2.6rem; gap: var(--space-2); align-items: center; }
-.active-compact-meter b { color: var(--blue); font-size: 0.86rem; text-align: right; }
-.active-meter { position: relative; height: 0.46rem; overflow: hidden; border-radius: var(--radius-pill); background: rgba(5, 7, 13, 0.78); }
-.active-meter span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--green)); transition: width var(--motion-medium); }
+.active-snapshot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+.active-snapshot span { min-width: 0; padding: 0.45rem 0.5rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(5, 7, 13, 0.54); text-align: center; }
+.active-snapshot b, .active-snapshot small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.active-snapshot b { color: var(--blue); font-size: 0.94rem; line-height: 1; }
+.active-snapshot small { margin-top: 0.18rem; color: var(--muted); font-size: 0.62rem; font-weight: 760; text-transform: uppercase; letter-spacing: 0.08em; }
 .active-idle-line { margin: var(--space-2) 0 0; padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .mini-job-list, .batch-list, .browser-list, .stage-list, .job-list, .preset-grid { display: grid; gap: var(--space-2); }
 .compact-active-card, .compact-batches-card { min-height: 7.9rem; }
@@ -179,8 +180,6 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
 .mini-job strong, .mini-job small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-job small { margin-top: 0.12rem; color: var(--muted); font-size: 0.72rem; }
 .mini-job b { color: var(--blue); }
-.mini-job i { position: absolute; left: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, var(--blue), var(--green)); }
-
 .compact-batches-card { display: flex; flex-direction: column; }
 .compact-batches-card .batch-list { flex: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
 .compact-batches-card .empty-state { grid-column: 1 / -1; min-height: 4.15rem; width: 100%; align-content: center; }
@@ -212,8 +211,9 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
 .error-text { margin: var(--space-2) 0 0; color: var(--red); font-size: 0.76rem; line-height: 1.42; }
 
 .batch-row { display: grid; gap: var(--space-1); min-width: 0; padding: 0.54rem 0.6rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(8, 13, 23, 0.66); }
-.batch-row strong, .batch-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-row strong, .batch-row span, .batch-row em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .batch-row span { color: var(--muted); font-size: 0.74rem; }
+.batch-row em { color: var(--pink); font-size: 0.68rem; font-style: normal; font-weight: 780; }
 .outputs-card { margin-top: var(--space-2); }
 .outputs-card .output-grid { min-height: 4.9rem; }
 .output-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }

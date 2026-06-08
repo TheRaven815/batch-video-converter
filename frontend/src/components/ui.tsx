@@ -36,7 +36,7 @@ export function ViewTabs({ value, onChange }: { value: string; onChange: (value:
 // ---------------------------------------------------------------------------
 
 export function MiniJob({ job, onOpen }: { job: JobRecord; onOpen: () => void }) {
-  return <button className="mini-job" type="button" onClick={onOpen}><span><strong>{job.input_filename || job.source_path || job.id}</strong><small>{job.progress_phase || job.status} · {formatEta(job.progress_eta_seconds)}</small></span><b>{getProgress(job)}%</b><i style={{ width: `${getProgress(job)}%` }} /></button>;
+  return <button className="mini-job" type="button" onClick={onOpen}><span><strong>{job.input_filename || job.source_path || job.id}</strong><small>{job.progress_phase || job.status} · {formatEta(job.progress_eta_seconds)}</small></span><b>{getProgress(job)}%</b></button>;
 }
 
 // ---------------------------------------------------------------------------
