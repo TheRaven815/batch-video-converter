@@ -106,7 +106,7 @@ http://localhost:8765/
 
 Local `docker-compose.yml` exposes:
 
-- API/UI: `8765:8000`
+- API/UI: `8765:8765`
 - Redis: `6380:6379`
 
 Do not expose Redis publicly in production. Keep Redis inside the Docker network or a private network.
@@ -235,9 +235,9 @@ Recommended Coolify settings:
 - Build/deploy type: Docker Compose.
 - Compose file: `docker-compose.coolify.yml`.
 - Public service: `api`.
-- Container port: `8000`.
+- Container port: `8765`.
 - Healthcheck path: `/health/ready`.
-- Example public host port in the compose file: `7777:8000`.
+- Example public host port in the compose file: `7777:8765`.
 
 Coolify compose details:
 
@@ -249,7 +249,7 @@ Coolify compose details:
   - `./data/media/downloads` -> `/media/downloads:ro`
 - `MEDIA_MOUNTS` uses container paths, for example `Movies=/media/movies;TV Series=/media/tv-series;Downloads=/media/downloads`.
 
-If you use a domain or Coolify reverse proxy and do not want a direct host port, remove the `7777:8000` mapping and rely on the Coolify proxy configuration.
+If you use a domain or Coolify reverse proxy and do not want a direct host port, remove the `7777:8765` mapping and rely on the Coolify proxy configuration.
 
 ## Environment Variables
 
@@ -447,4 +447,4 @@ docker compose up --build
 - WebM with `audio_export=copy` behaves differently: the worker normalizes WebM output for container compatibility and may fall back to Opus.
 - Built UI is missing locally: run `cd frontend && npm run build` or use the Vite dev server while the API runs separately.
 - Docker build fails in frontend stage: run `cd frontend && npm install && npm run build` locally to see TypeScript/Vite errors.
-- Coolify cannot route the app: ensure public service is `api`, container port is `8000`, compose file is `docker-compose.coolify.yml`, and healthcheck path is `/health/ready`.
+- Coolify cannot route the app: ensure public service is `api`, container port is `8765`, compose file is `docker-compose.coolify.yml`, and healthcheck path is `/health/ready`.

@@ -31,6 +31,6 @@ COPY src /app/src
 # included in the final image — the backend only serves from frontend/dist/.
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
-EXPOSE 8000
+EXPOSE 8765
 
-CMD ["uvicorn", "video_converter.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "video_converter.api.main:app", "--host", "0.0.0.0", "--port", "8765"]
