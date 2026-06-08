@@ -50,7 +50,6 @@ import {
   fileName,
   formatDate,
   formatEta,
-  getProgress,
   mergeJobs,
   mergeOutputs,
   normalizeStatus,
@@ -65,7 +64,6 @@ import {
   StatusBadge,
   EmptyState,
   ViewTabs,
-  MiniJob,
   JobControls,
   JobList,
   OutputsPanel,
@@ -126,7 +124,6 @@ function App() {
   const selectedJob = useMemo(() => jobs.find((job) => job.id === selectedJobId) || null, [jobs, selectedJobId]);
   const activeJobs = useMemo(() => jobs.filter((job) => ['queued', 'running'].includes(job.status)), [jobs]);
   const runningJobs = useMemo(() => jobs.filter((job) => job.status === 'running'), [jobs]);
-  const globalProgress = useMemo(() => (activeJobs.length ? Math.round(activeJobs.reduce((total, job) => total + getProgress(job), 0) / activeJobs.length) : 0), [activeJobs]);
 
   const summary = useMemo(() => {
     const counts: Record<JobStatus | 'all', number> = { all: jobs.length, queued: 0, running: 0, cancelled: 0, completed: 0, failed: 0 };
@@ -509,9 +506,12 @@ function App() {
               <section className="card active-card compact-active-card" aria-label="Active conversion status">
                 <div className="active-compact-row">
                   <div className="active-compact-copy"><span className="eyebrow">Active</span><strong>{runningJobs.length ? `${runningJobs.length} running` : 'Idle'}</strong><small>{activeJobs.length ? `${activeJobs.length} queued or active` : 'No running conversions'}</small></div>
-                  <div className="active-snapshot" aria-label="Current queue snapshot"><span><b>{globalProgress}%</b><small>overall</small></span><span><b>{workerHealth?.queue_depth ?? summary.queued}</b><small>queued</small></span><span><b>{workerHealth?.running_jobs ?? runningJobs.length}</b><small>worker</small></span></div>
+                  <div className="active-snapshot" aria-label="Current queue snapshot"><span><b>{summary.completed}</b><small>done</small></span><span><b>{workerHealth?.queue_depth ?? summary.queued}</b><small>queued</small></span><span><b>{workerHealth?.running_jobs ?? runningJobs.length}</b><small>worker</small></span></div>
                 </div>
-                {runningJobs.length ? <div className="mini-job-list compact-mini-list">{runningJobs.slice(0, 2).map((job) => <MiniJob key={job.id} job={job} onOpen={() => setSelectedJobId(job.id)} />)}</div> : <p className="active-idle-line">Queue activity will appear here when conversions start.</p>}
+                <div className="active-summary-note" role="status">
+                  <strong>{runningJobs.length ? 'Conversions are running' : activeJobs.length ? 'Waiting in queue' : 'Queue is clear'}</strong>
+                  <span>{runningJobs.length ? 'Detailed progress stays in Jobs so the dashboard stays calm.' : activeJobs.length ? 'Jobs will start when the worker is ready.' : 'Create jobs from Convert when you are ready.'}</span>
+                </div>
               </section>
               <section className="card batches-card compact-batches-card">
                 <CardHeader title="Recent batches" badge={`${batches.length} batches`} />

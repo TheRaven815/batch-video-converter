@@ -15,7 +15,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+DEFAULT_REDIS_URL = "redis://localhost:6380/0"
 DEFAULT_DATA_ROOT = "./data"
 DEFAULT_MEDIA_MOUNTS = "Filmler=./media/filmler;Diziler=./media/diziler"
 DEFAULT_STORAGE = "local"
@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         "--worker-only", action="store_true", help="Start only the Redis/FFmpeg worker."
     )
     parser.add_argument("--host", default="0.0.0.0", help="API host bind address. Default: 0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000, help="API port. Default: 8000")
+    parser.add_argument("--port", type=int, default=8765, help="API port. Default: 8765")
     parser.add_argument(
         "--no-browser", action="store_true", help="Do not open the local UI in a browser."
     )
@@ -243,7 +243,7 @@ def warn_for_missing_frontend_build() -> None:
 
     print("[warning] Built frontend was not found at frontend/dist/index.html.")
     print(
-        "          The API and worker can still start, but http://localhost:8000/ will return 404 until the UI is built."
+        "          The API and worker can still start, but http://localhost:8765/ will return 404 until the UI is built."
     )
     print("          Build it locally with: cd frontend && npm install && npm run build")
     print(

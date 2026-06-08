@@ -101,13 +101,13 @@ docker compose up --build -d
 4. Open the UI:
 
 ```text
-http://localhost:8000/
+http://localhost:8765/
 ```
 
 Local `docker-compose.yml` exposes:
 
-- API/UI: `8000:8000`
-- Redis: `6379:6379`
+- API/UI: `8765:8000`
+- Redis: `6380:6379`
 
 Do not expose Redis publicly in production. Keep Redis inside the Docker network or a private network.
 
@@ -151,7 +151,7 @@ Useful launcher options:
 ```sh
 python run_local.py --api-only
 python run_local.py --worker-only
-python run_local.py --host 127.0.0.1 --port 8000
+python run_local.py --host 127.0.0.1 --port 8765
 python run_local.py --no-browser
 python run_local.py --storage redis
 python run_local.py --skip-redis-check
@@ -161,7 +161,7 @@ Default local settings used by `run_local.py` when environment variables are not
 
 ```env
 VIDEO_CONVERTER_STORAGE=local
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://localhost:6380/0
 DATA_ROOT=./data
 MEDIA_MOUNTS=Movies=./media/Movies;Series=./media/Series
 ```
@@ -179,7 +179,7 @@ npm run dev
 ```
 
 - Vite dev server listens on port `5173`.
-- `frontend/vite.config.ts` proxies API calls to `http://localhost:8000`.
+- `frontend/vite.config.ts` proxies API calls to `http://localhost:8765`.
 - Run the FastAPI API separately when using the Vite dev server.
 - The Vite base is `/ui/`; FastAPI serves the built SPA under `/ui` and returns the SPA entry for `/`.
 
@@ -214,7 +214,7 @@ MEDIA_MOUNTS=Media=/data/input
 
 `docker-compose.yml` is intended for local development:
 
-- `api` runs `uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8000`.
+- `api` runs `uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8765`.
 - `worker` runs `python -m video_converter.worker.main`.
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
 - `./data` is mounted to `${DATA_ROOT:-/data}` for API and worker.
@@ -256,7 +256,7 @@ If you use a domain or Coolify reverse proxy and do not want a direct host port,
 | Variable | Default / example | Description |
 | --- | --- | --- |
 | `VIDEO_CONVERTER_STORAGE` | `redis` | Storage backend. Use `redis` for Docker/production and `local` for single-machine development. |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL when `VIDEO_CONVERTER_STORAGE=redis`. Local Redis usually uses `redis://localhost:6379/0`. |
+| `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL when `VIDEO_CONVERTER_STORAGE=redis`. Local Redis usually uses `redis://localhost:6380/0`. |
 | `DATA_ROOT` | `/data` | Writable application root. The app creates `input`, `outputs`, `temp`, `logs`, and `data` under it. |
 | `MEDIA_MOUNTS` | `Label=/container/path;Label2=/container/path2` | Read-only media roots shown in the UI. If empty, the app falls back to `DATA_ROOT/input`. |
 | `WORKER_CONCURRENCY` | `1` | Number of jobs processed concurrently by the worker. Increase only when CPU/RAM/IO capacity is sufficient. |
@@ -323,7 +323,7 @@ Supported source video extensions are `mp4`, `mov`, `mkv`, `avi`, `webm`, `m4v`,
 
 ## Frontend Usage
 
-1. Open `http://localhost:8000/` for the built UI or the Vite dev URL during frontend development.
+1. Open `http://localhost:8765/` for the built UI or the Vite dev URL during frontend development.
 2. Use the media browser to select files from configured server roots.
 3. Add selected files to the staging list and remove or select entries as needed.
 4. Choose export settings:

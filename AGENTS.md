@@ -68,7 +68,7 @@ pip install -r requirements-dev.txt
 python run_local.py
 python run_local.py --api-only
 python run_local.py --worker-only
-python run_local.py --host 127.0.0.1 --port 8000
+python run_local.py --host 127.0.0.1 --port 8765
 python run_local.py --no-browser
 python run_local.py --storage redis
 ```
@@ -77,7 +77,7 @@ Default local mode:
 
 ```env
 VIDEO_CONVERTER_STORAGE=local
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://localhost:6380/0
 DATA_ROOT=./data
 MEDIA_MOUNTS=Movies=./media/filmler;Series=./media/diziler
 ```
@@ -94,9 +94,9 @@ mkdir media\diziler
 docker compose up --build -d
 ```
 
-UI: `http://localhost:8000/`
+UI: `http://localhost:8765/`
 
-Local compose exposes the Redis port to the host with `6379:6379`. Do not expose Redis to the internet in public/production environments; keep it only inside the Docker network or a private network.
+Local compose exposes the Redis port to the host with `6380:6379`. Do not expose Redis to the internet in public/production environments; keep it only inside the Docker network or a private network.
 
 ### Frontend
 
@@ -108,7 +108,7 @@ cd frontend && npm run preview
 ```
 
 - Vite dev server port is `5173`.
-- `frontend/vite.config.ts` forwards API proxies to `http://localhost:8000`.
+- `frontend/vite.config.ts` forwards API proxies to `http://localhost:8765`.
 - Do not change the `base: '/ui/'` setting carelessly; FastAPI serves the built SPA under `/ui` and serves the entry file for root `/` requests.
 - `frontend/dist/` is build output and must not be committed.
 
@@ -214,7 +214,7 @@ When changing the API contract:
 - `Dockerfile` has two stages: `node:22-slim` builds the frontend, and `python:3.11-slim` creates the final runtime image.
 - The final image ships with defaults `PYTHONPATH=/app/src`, `VIDEO_CONVERTER_STORAGE=redis`, and `DATA_ROOT=/data`.
 - FFmpeg is installed into the final image via apt; without FFmpeg, the worker cannot perform real conversions.
-- `docker-compose.yml` is for local development; the API exposes `8000:8000`, Redis exposes `6379:6379`.
+- `docker-compose.yml` is for local development; the API exposes `8765:8000`, Redis exposes `6380:6379`.
 - `docker-compose.coolify.yml` is for Coolify; example public port is `7777:8000`, health check is `/health/ready`, and it has `app-data` and `redis-data` named volumes.
 - In Coolify, the public service must be `api`, the container port must be `8000`, and the compose file must be `docker-compose.coolify.yml`.
 - Do not expose the Redis host port publicly in production. Keep Redis inside the Docker network/private network.

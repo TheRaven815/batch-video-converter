@@ -7,7 +7,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "8765:8000"
     volumes:
       - ./data:${DATA_ROOT:-/data}
       # İhtiyacınız kadar medya mount satırı ekleyin/silin.
@@ -53,7 +53,7 @@ services:
     image: redis:7.2-alpine
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - ./data/redis:/data
     healthcheck:
