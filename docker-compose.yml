@@ -1,39 +1,17 @@
 services:
-  api:
+  app:
+    container_name: batch-video-converter
     build:
       context: .
       dockerfile: Dockerfile
-    command: uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8765
+    # Default CMD (/app/entrypoint.sh) runs both API and worker together.
+    # Override with one of the following to run them separately:
+    #   command: uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8765
+    #   command: python -m video_converter.worker.main
     env_file:
       - .env
     ports:
       - "8765:8765"
-    volumes:
-      - ./data:${DATA_ROOT:-/data}
-      # Add/remove media mount lines as needed.
-      - ./media/movies:/media/movies:ro
-      - ./media/series:/media/series:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-          cpus: "0.5"
-    restart: unless-stopped
-
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python -m video_converter.worker.main
-    # WORKER_CONCURRENCY controls how many jobs are processed concurrently.
-    # Default is 1 (single-threaded, backward-compatible).
-    # Increase cautiously on resource-constrained devices like Raspberry Pi.
-    # Example: WORKER_CONCURRENCY=2
-    env_file:
-      - .env
     volumes:
       - ./data:${DATA_ROOT:-/data}
       # Add/remove media mount lines as needed.
@@ -50,6 +28,7 @@ services:
     restart: unless-stopped
 
   redis:
+    container_name: batch-video-converter-redis
     image: redis:7.2-alpine
     command: redis-server --appendonly yes
     ports:

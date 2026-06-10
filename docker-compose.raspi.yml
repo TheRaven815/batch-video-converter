@@ -1,0 +1,44 @@
+# Raspberry Pi / Portainer stack — 2 containers (app + redis)
+# The app container runs both the API server and the worker via entrypoint.sh.
+
+services:
+  app:
+    container_name: batch-video-converter
+    image: ghcr.io/theraven815/batch-video-converter:latest
+    # Default entrypoint runs API + worker together.
+    # To run only the API:  command: uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8765
+    # To run only the worker: command: python -m video_converter.worker.main
+    environment:
+      VIDEO_CONVERTER_STORAGE: redis
+      REDIS_URL: redis://redis:6379/0
+      DATA_ROOT: /data
+      MEDIA_MOUNTS: Downloads=/media/downloads;Movies=/media/movies;TV Series=/media/tv-series
+      WORKER_CONCURRENCY: "1"
+    ports:
+      - "8099:8765"
+    volumes:
+      - app-data:/data
+      - /media/RAVEN/Downloads:/media/downloads:ro
+      - /media/RAVEN/Movies:/media/movies:ro
+      - "/media/RAVEN/TV Series:/media/tv-series:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    container_name: batch-video-converter-redis
+    image: redis:7.2-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  redis-data:

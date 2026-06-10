@@ -31,6 +31,10 @@ COPY src /app/src
 # included in the final image — the backend only serves from frontend/dist/.
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 8765
 
-CMD ["uvicorn", "video_converter.api.main:app", "--host", "0.0.0.0", "--port", "8765"]
+# Default: run API + worker together. Override CMD in compose for separate services.
+CMD ["/app/entrypoint.sh"]

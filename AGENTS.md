@@ -214,11 +214,11 @@ When changing the API contract:
 - `Dockerfile` has two stages: `node:22-slim` builds the frontend, and `python:3.11-slim` creates the final runtime image.
 - The final image ships with defaults `PYTHONPATH=/app/src`, `VIDEO_CONVERTER_STORAGE=redis`, and `DATA_ROOT=/data`.
 - FFmpeg is installed into the final image via apt; without FFmpeg, the worker cannot perform real conversions.
-- `docker-compose.yml` is for local development; the API exposes `8765:8765`, Redis exposes `6380:6379`.
+- `docker-compose.yml` is for local development; the `app` service runs both API and worker via `entrypoint.sh`, exposes `8765:8765`; Redis exposes `6380:6379`.
 - `docker-compose.coolify.yml` is for Coolify; example public port is `7777:8765`, health check is `/health/ready`, and it has `app-data` and `redis-data` named volumes.
-- In Coolify, the public service must be `api`, the container port must be `8765`, and the compose file must be `docker-compose.coolify.yml`.
+- In Coolify, the public service must be `app`, the container port must be `8765`, and the compose file must be `docker-compose.coolify.yml`.
 - Do not expose the Redis host port publicly in production. Keep Redis inside the Docker network/private network.
-- When changing media mounts, update both `MEDIA_MOUNTS` and the `api`/`worker` volume lines at the same time.
+- When changing media mounts, update both `MEDIA_MOUNTS` and the `app` service volume lines at the same time.
 - Before increasing the worker replica count, verify FFmpeg resource usage and access to the same volumes.
 
 ## Code Standards
@@ -282,7 +282,7 @@ When writing tests:
 ### Adding a New Media Root
 
 1. Append `Label=/container/path` to `MEDIA_MOUNTS` in `.env` or `.env.coolify`.
-2. Add a `:ro` volume for the same container path to both `api` and `worker` services in `docker-compose.yml` or `docker-compose.coolify.yml`.
+2. Add a `:ro` volume for the same container path to the `app` service in `docker-compose.yml` or `docker-compose.coolify.yml`.
 3. Verify that the host directory exists and that the container path matches `MEDIA_MOUNTS`.
 4. Check `GET /api/v1/media/roots` and the browse flow in the UI.
 
