@@ -103,7 +103,6 @@ export function JobList({ jobsLoading, jobs, selectedJobIds, setSelectedJobIds, 
           </div>
           <div className="job-actions">
             <span className="progress-number">{getProgress(job)}%</span>
-            {job.status === 'completed' && job.output_filename ? <a className="ghost-button tiny" href={`/api/v1/outputs/${encodeURIComponent(job.output_filename)}/download`}>Download</a> : null}
             <button className="ghost-button tiny" type="button" onClick={() => setSelectedJobId(job.id)}>Open</button>
             {['queued', 'running'].includes(job.status) ? <button className="ghost-button tiny" type="button" onClick={() => void cancelJob(job.id).then(() => refreshJobs('background'))}>Cancel</button> : null}
           </div>
@@ -117,16 +116,16 @@ export function JobList({ jobsLoading, jobs, selectedJobIds, setSelectedJobIds, 
 // OutputsPanel
 // ---------------------------------------------------------------------------
 
-export function OutputsPanel({ outputs, compact = false }: { outputs: OutputFileDto[]; compact?: boolean }) {
+export function OutputsPanel({ outputs, compact = false, onClear }: { outputs: OutputFileDto[]; compact?: boolean; onClear?: () => void }) {
   return (
     <section className={`card outputs-card ${compact ? 'compact-outputs' : ''}`}>
-      <CardHeader title="Recent outputs" badge={`${outputs.length} files`} />
-      <div className="output-grid">
-        {outputs.length ? outputs.slice(0, compact ? 4 : 16).map((output) => (
-          <a className="output-tile" href={output.download_url} key={output.filename}>
+      <div className="card-header"><h3>Recent outputs</h3><span className="card-header-actions">{onClear && outputs.length ? <button className="ghost-button tiny" type="button" onClick={onClear}>Clear</button> : null}<span className="soft-badge">{outputs.length} files</span></span></div>
+      <div className="output-list">
+        {outputs.length ? outputs.slice(0, compact ? 6 : 20).map((output) => (
+          <div className="output-tile" key={output.filename}>
             <strong>{output.filename}</strong>
             <small>{formatBytes(output.size_bytes)} · {formatDate(output.modified_at)}</small>
-          </a>
+          </div>
         )) : <EmptyState title="No outputs yet" body="Completed conversions will appear here when available." />}
       </div>
     </section>

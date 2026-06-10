@@ -197,7 +197,7 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
 
 .dashboard-workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 20rem;
+  grid-template-columns: minmax(0, 1fr) 26rem;
   gap: var(--space-4);
   align-items: start;
 }
@@ -205,8 +205,7 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
   display: grid;
   gap: var(--space-4);
 }
-.dashboard-sidebar .compact-batches-card .batch-list,
-.dashboard-sidebar .output-grid {
+.dashboard-sidebar .compact-batches-card .batch-list {
   grid-template-columns: 1fr;
 }
 
@@ -244,13 +243,11 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
 .batch-row strong, .batch-row span, .batch-row em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .batch-row span { color: var(--muted); font-size: 0.74rem; }
 .batch-row em { color: var(--pink); font-size: 0.68rem; font-style: normal; font-weight: 780; }
-.outputs-card { margin-top: var(--space-2); }
-.outputs-card .output-grid { min-height: 4.9rem; }
-.output-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
-.output-grid > .empty-state { grid-column: 1 / -1; width: 100%; min-height: 4.3rem; align-content: center; }
-.compact-outputs .output-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.output-tile { position: relative; display: block; overflow: hidden; padding: 0.78rem; border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(8, 13, 23, 0.72); transition: border-color var(--motion-fast), background var(--motion-fast), transform var(--motion-fast); }
-.output-tile:hover { border-color: rgba(57, 217, 138, 0.32); background: rgba(57, 217, 138, 0.07); transform: translateY(-1px); }
+.output-list { display: grid; gap: var(--space-2); }
+.output-list > .empty-state { width: 100%; min-height: 4.3rem; align-content: center; }
+.output-tile { position: relative; display: block; overflow: hidden; padding: 0.62rem 0.78rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(8, 13, 23, 0.72); transition: border-color var(--motion-fast), background var(--motion-fast); }
+.output-tile:hover { border-color: rgba(57, 217, 138, 0.32); background: rgba(57, 217, 138, 0.07); }
+.card-header-actions { display: inline-flex; align-items: center; gap: var(--space-2); }
 
 .convert-layout { display: grid; grid-template-columns: minmax(320px, 0.95fr) minmax(280px, 0.7fr); grid-template-areas: "heading heading" "browser staging" "browser settings"; gap: var(--space-4); align-items: start; }
 .convert-heading { grid-area: heading; }
@@ -320,7 +317,6 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
   .health-cluster { justify-content: flex-start; }
   .dashboard-workspace-grid, .convert-layout, .presets-layout { grid-template-columns: 1fr; grid-template-areas: none; }
   .convert-heading, .browser-card, .staging-card, .settings-card, .presets-layout .page-heading, .preset-editor, .presets-card { grid-area: auto; }
-  .compact-outputs .output-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 820px) {
@@ -329,7 +325,7 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
   .page-heading, .queue-toolbar { align-items: stretch; flex-direction: column; }
   .filter-row, .browser-controls, .field-grid.two, .preset-form, .advanced-grid, .preset-grid { grid-template-columns: 1fr; }
   .advanced-grid > .empty-state { min-height: 7rem; }
-  .output-grid, .preset-grid, .compact-outputs .output-grid, .compact-mini-list, .compact-batches-card .batch-list { grid-template-columns: 1fr; }
+  .output-grid, .preset-grid, .compact-mini-list, .compact-batches-card .batch-list { grid-template-columns: 1fr; }
   .bulk-row { justify-content: flex-start; }
   .bulk-row > span { width: 100%; margin-right: 0; }
   .job-row { grid-template-columns: auto 1fr; }

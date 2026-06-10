@@ -524,7 +524,7 @@ function App() {
                   <ViewTabs value={dashboardView} onChange={(v) => setDashboardView(v as DashboardView)} />
                 </div>
                 <JobControls filters={filters} setFilters={setFilters} selectedCount={selectedJobIds.size} filteredJobs={filteredJobs} setSelectedJobIds={setSelectedJobIds} runBulkAction={runBulkAction} />
-                {dashboardView === 'outputs' ? <OutputsPanel outputs={outputs} /> : dashboardView === 'advanced' ? <AdvancedPanel streamState={streamState} workerHealth={workerHealth} roots={roots} /> : <JobList jobsLoading={jobsLoading} jobs={filteredJobs} selectedJobIds={selectedJobIds} setSelectedJobIds={setSelectedJobIds} setSelectedJobId={setSelectedJobId} refreshJobs={refreshJobs} cancelJob={(id) => cancelJob(id)} />}
+                {dashboardView === 'outputs' ? <OutputsPanel outputs={outputs} onClear={() => setOutputs([])} /> : dashboardView === 'advanced' ? <AdvancedPanel streamState={streamState} workerHealth={workerHealth} roots={roots} /> : <JobList jobsLoading={jobsLoading} jobs={filteredJobs} selectedJobIds={selectedJobIds} setSelectedJobIds={setSelectedJobIds} setSelectedJobId={setSelectedJobId} refreshJobs={refreshJobs} cancelJob={(id) => cancelJob(id)} />}
               </section>
 
               <aside className="dashboard-sidebar">
@@ -541,7 +541,7 @@ function App() {
                   </div>
                 </section>
 
-                <OutputsPanel outputs={outputs} compact={true} />
+                <OutputsPanel outputs={outputs} compact={true} onClear={() => setOutputs([])} />
               </aside>
             </div>
           </section>
@@ -621,7 +621,6 @@ function App() {
       {selectedJob ? <aside className="detail-drawer" role="dialog" aria-modal="false" aria-label={`Job detail for ${selectedJob.input_filename || selectedJob.id}`}>
         <div className="drawer-header"><div><p className="eyebrow">Job detail</p><h2>{selectedJob.input_filename || selectedJob.id}</h2></div><button className="ghost-button tiny" type="button" onClick={() => setSelectedJobId(null)} aria-label="Close job detail">Close</button></div>
         <dl className="detail-grid"><div><dt>Status</dt><dd><StatusBadge status={selectedJob.status} /></dd></div><div><dt>Source path</dt><dd>{selectedJob.source_path || selectedJob.input_filename || 'Legacy input'}</dd></div><div><dt>Batch</dt><dd>{selectedJob.batch_id || '—'}</dd></div><div><dt>Telemetry</dt><dd>{formatEta(selectedJob.progress_eta_seconds)} · {selectedJob.progress_fps ?? '—'} fps · {selectedJob.progress_bitrate || 'bitrate —'} · {selectedJob.progress_speed || 'speed —'}</dd></div></dl>
-        {selectedJob.output_filename ? <a className="primary-button full" href={`/api/v1/outputs/${encodeURIComponent(selectedJob.output_filename)}/download`}>Download output</a> : null}
         <h3>Timeline</h3><ol className="timeline-list">{selectedJob.timeline?.length ? selectedJob.timeline.map((item, index) => <li key={`${item.at}-${index}`}><strong>{item.phase || item.status}</strong><span>{formatDate(item.at)} · {item.message || ''}</span></li>) : <li>No timeline events yet.</li>}</ol>
         <h3>Log tail</h3><pre className="log-tail">{selectedJob.log_tail?.length ? selectedJob.log_tail.join('\n') : 'No log lines yet.'}</pre>
       </aside> : null}
