@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_REDIS_URL = "redis://localhost:6380/0"
 DEFAULT_DATA_ROOT = "./data"
-DEFAULT_MEDIA_MOUNTS = "Filmler=./media/filmler;Diziler=./media/diziler"
+DEFAULT_MEDIA_MOUNTS = "Movies=./media/movies;Series=./media/series"
 DEFAULT_STORAGE = "local"
 REQUIRED_MODULES = {
     "fastapi": "fastapi",
@@ -95,8 +95,8 @@ def create_runtime_directories() -> None:
         data_root / "temp",
         data_root / "logs",
         data_root / "data",
-        PROJECT_ROOT / "media" / "filmler",
-        PROJECT_ROOT / "media" / "diziler",
+        PROJECT_ROOT / "media" / "movies",
+        PROJECT_ROOT / "media" / "series",
     ]:
         path.mkdir(parents=True, exist_ok=True)
 

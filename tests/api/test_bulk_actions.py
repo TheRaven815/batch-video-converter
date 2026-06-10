@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import video_converter.api.main as api
+from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME
 from video_converter.core.models import JobIdsRequest, JobRecord, JobStatus, now_iso
 
 
@@ -13,7 +14,7 @@ class _FakeJobRepository:
         self.deleted_keys: list[str] = []
 
     def remove_from_queue(self, job_id: str) -> int:
-        return self.lrem(api.QUEUE_NAME, 0, job_id)
+        return self.lrem(QUEUE_NAME, 0, job_id)
 
     def persist(self, record: JobRecord) -> None:
         return None
@@ -22,12 +23,12 @@ class _FakeJobRepository:
         self.queue.append(record.id)
 
     def delete(self, job_id: str) -> None:
-        self.lrem(api.QUEUE_NAME, 0, job_id)
-        self.lrem(api.JOBS_INDEX_KEY, 0, job_id)
-        self.deleted_keys.append(f"{api.JOB_KEY_PREFIX}{job_id}")
+        self.lrem(QUEUE_NAME, 0, job_id)
+        self.lrem(JOBS_INDEX_KEY, 0, job_id)
+        self.deleted_keys.append(f"{JOB_KEY_PREFIX}{job_id}")
 
     def lrem(self, key: str, count: int, value: str) -> int:
-        target = self.queue if key == api.QUEUE_NAME else self.index
+        target = self.queue if key == QUEUE_NAME else self.index
         removed = 0
         kept: list[str] = []
         for item in target:
@@ -51,10 +52,10 @@ class _FakeJobRepository:
         return removed
 
     def rpush(self, key: str, value: str) -> int:
-        if key == api.QUEUE_NAME:
+        if key == QUEUE_NAME:
             self.queue.append(value)
             return len(self.queue)
-        if key == api.JOBS_INDEX_KEY:
+        if key == JOBS_INDEX_KEY:
             self.index.append(value)
             return len(self.index)
         return 0
@@ -133,7 +134,7 @@ def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
     assert records["queued-1"].progress_phase == "cancelled"
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["done-1"] == "İş zaten sonlanmış durumda"
+    assert skip_map["done-1"] == "Job is already completed"
     assert skip_map["missing"] == "Job not found"
 
 
@@ -157,7 +158,7 @@ def test_archive_jobs_bulk_soft_deletes_non_running_records(monkeypatch: Any) ->
     assert "archive-1" not in fake_repository.queue
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["running-1"] == "Running iş arşivlenemez"
+    assert skip_map["running-1"] == "Running job cannot be archived"
     assert skip_map["missing"] == "Job not found"
 
 
@@ -180,8 +181,8 @@ def test_delete_jobs_bulk_skips_running_and_removes_persisted_records(monkeypatc
     assert [item.id for item in result.updated] == ["delete-1"]
     assert "delete-1" not in fake_repository.queue
     assert "delete-1" not in fake_repository.index
-    assert f"{api.JOB_KEY_PREFIX}delete-1" in fake_repository.deleted_keys
+    assert f"{JOB_KEY_PREFIX}delete-1" in fake_repository.deleted_keys
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["running-1"] == "Running iş silinemez"
+    assert skip_map["running-1"] == "Running job cannot be deleted"
     assert skip_map["missing"] == "Job not found"

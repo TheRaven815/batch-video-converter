@@ -122,7 +122,7 @@ export function OutputsPanel({ outputs, compact = false }: { outputs: OutputFile
     <section className={`card outputs-card ${compact ? 'compact-outputs' : ''}`}>
       <CardHeader title="Recent outputs" badge={`${outputs.length} files`} />
       <div className="output-grid">
-        {outputs.length ? outputs.slice(0, compact ? 6 : 16).map((output) => (
+        {outputs.length ? outputs.slice(0, compact ? 4 : 16).map((output) => (
           <a className="output-tile" href={output.download_url} key={output.filename}>
             <strong>{output.filename}</strong>
             <small>{formatBytes(output.size_bytes)} · {formatDate(output.modified_at)}</small>

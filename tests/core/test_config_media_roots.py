@@ -11,7 +11,7 @@ from video_converter.core.config import _derive_key_from_label, _parse_media_roo
 
 def test_derive_key_lowercases_simple_label() -> None:
     used: set[str] = set()
-    assert _derive_key_from_label("Filmler", used) == "filmler"
+    assert _derive_key_from_label("Movies", used) == "movies"
 
 
 def test_derive_key_replaces_special_chars_with_underscores() -> None:
@@ -21,7 +21,7 @@ def test_derive_key_replaces_special_chars_with_underscores() -> None:
 
 def test_derive_key_strips_leading_trailing_underscores() -> None:
     used: set[str] = set()
-    assert _derive_key_from_label("--Filmler--", used) == "filmler"
+    assert _derive_key_from_label("--Movies--", used) == "movies"
 
 
 def test_derive_key_falls_back_to_root_for_empty_label() -> None:
@@ -34,18 +34,18 @@ def test_derive_key_falls_back_to_root_for_empty_label() -> None:
 
 def test_derive_key_disambiguates_duplicates() -> None:
     used: set[str] = set()
-    first = _derive_key_from_label("Filmler", used)
-    second = _derive_key_from_label("Filmler", used)
-    third = _derive_key_from_label("Filmler", used)
+    first = _derive_key_from_label("Movies", used)
+    second = _derive_key_from_label("Movies", used)
+    third = _derive_key_from_label("Movies", used)
 
-    assert first == "filmler"
-    assert second == "filmler_2"
-    assert third == "filmler_3"
+    assert first == "movies"
+    assert second == "movies_2"
+    assert third == "movies_3"
 
 
 def test_derive_key_does_not_collide_with_existing_keys() -> None:
-    used: set[str] = {"filmler"}
-    assert _derive_key_from_label("Filmler", used) == "filmler_2"
+    used: set[str] = {"movies"}
+    assert _derive_key_from_label("Movies", used) == "movies_2"
 
 
 # ---------------------------------------------------------------------------
@@ -54,19 +54,19 @@ def test_derive_key_does_not_collide_with_existing_keys() -> None:
 
 
 def test_parse_media_roots_uses_label_as_key(tmp_path: Path) -> None:
-    raw = "Filmler=/media/filmler;Diziler=/media/diziler"
+    raw = "Movies=/media/movies;Series=/media/series"
     roots = _parse_media_roots(raw, input_dir=tmp_path / "input")
 
     keys = [r.key for r in roots]
     labels = [r.label for r in roots]
 
-    assert keys == ["filmler", "diziler"]
-    assert labels == ["Filmler", "Diziler"]
+    assert keys == ["movies", "series"]
+    assert labels == ["Movies", "Series"]
 
 
 def test_parse_media_roots_key_stable_regardless_of_order(tmp_path: Path) -> None:
-    raw_a = "Filmler=/a;Diziler=/b"
-    raw_b = "Diziler=/b;Filmler=/a"
+    raw_a = "Movies=/a;Series=/b"
+    raw_b = "Series=/b;Movies=/a"
 
     roots_a = _parse_media_roots(raw_a, input_dir=tmp_path / "input")
     roots_b = _parse_media_roots(raw_b, input_dir=tmp_path / "input")
@@ -75,15 +75,15 @@ def test_parse_media_roots_key_stable_regardless_of_order(tmp_path: Path) -> Non
     keys_b = [r.key for r in roots_b]
 
     # Both should contain the same keys (order may differ because mount order differs)
-    assert set(keys_a) == set(keys_b) == {"filmler", "diziler"}
+    assert set(keys_a) == set(keys_b) == {"movies", "series"}
 
 
 def test_parse_media_roots_duplicate_labels_disambiguated(tmp_path: Path) -> None:
-    raw = "Filmler=/a;Filmler=/b"
+    raw = "Movies=/a;Movies=/b"
     roots = _parse_media_roots(raw, input_dir=tmp_path / "input")
 
-    assert roots[0].key == "filmler"
-    assert roots[1].key == "filmler_2"
+    assert roots[0].key == "movies"
+    assert roots[1].key == "movies_2"
 
 
 def test_parse_media_roots_no_label_gets_default_key(tmp_path: Path) -> None:

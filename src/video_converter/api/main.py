@@ -94,11 +94,11 @@ def _error_code_from_message(message: str, status_code: int) -> str:
     normalized = message.lower()
     if "source_root_key" in normalized:
         return "invalid_source_root"
-    if "kök dizin dışında" in normalized or "geçersiz path" in normalized:
+    if "outside the root directory" in normalized or "invalid path" in normalized:
         return "path_traversal_blocked"
-    if "desteklenmeyen uzantı" in normalized:
+    if "unsupported extension" in normalized:
         return "unsupported_extension"
-    if "bulunamadı" in normalized or "not found" in normalized:
+    if "not found" in normalized:
         return "not_found"
     return _ERROR_CODE_BY_STATUS.get(status_code, "api_error")
 
@@ -160,7 +160,7 @@ def _validate_source_payload(payload: JobCreateRequest) -> None:
     has_path = bool(payload.source_path)
     if has_root != has_path:
         raise HTTPException(
-            status_code=422, detail="source_root_key ve source_path birlikte verilmelidir"
+            status_code=422, detail="source_root_key and source_path must be provided together"
         )
 
     if not has_root:
@@ -385,7 +385,7 @@ def _parse_status_filter(status: str | JobStatus | None) -> set[JobStatus] | Non
             statuses.add(JobStatus(value))
         except ValueError as exc:
             raise HTTPException(
-                status_code=422, detail=f"Geçersiz status filtresi: {value}"
+                status_code=422, detail=f"Invalid status filter: {value}"
             ) from exc
 
     return statuses or None
@@ -397,7 +397,7 @@ def _parse_datetime_filter(value: str | None, name: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Geçersiz {name} filtresi") from exc
+        raise HTTPException(status_code=422, detail=f"Invalid {name} filter") from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
@@ -618,7 +618,7 @@ def _safe_output_path(filename: str) -> Path:
     try:
         output_path.relative_to(settings.outputs_dir.resolve())
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Geçersiz output filename") from exc
+        raise HTTPException(status_code=400, detail="Invalid output filename") from exc
     return output_path
 
 
@@ -664,13 +664,13 @@ def list_outputs(
 def download_output(filename: str) -> FileResponse:
     output_path = _safe_output_path(filename)
     if not output_path.exists() or not output_path.is_file():
-        raise HTTPException(status_code=404, detail="Output bulunamadı")
+        raise HTTPException(status_code=404, detail="Output not found")
     return FileResponse(output_path, filename=output_path.name)
 
 
 def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:
     if record.status in {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}:
-        return record, "İş zaten sonlanmış durumda"
+        return record, "Job is already completed"
 
     now = now_iso()
     record.cancel_requested = True
@@ -736,11 +736,11 @@ def start_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
             continue
 
         if record.status == JobStatus.running:
-            skipped.append(JobActionSkip(job_id=job_id, reason="Running iş yeniden başlatılamaz"))
+            skipped.append(JobActionSkip(job_id=job_id, reason="Running job cannot be restarted"))
             continue
 
         if record.status == JobStatus.queued:
-            skipped.append(JobActionSkip(job_id=job_id, reason="İş zaten queued durumda"))
+            skipped.append(JobActionSkip(job_id=job_id, reason="Job is already queued"))
             continue
 
         now = now_iso()
@@ -773,7 +773,7 @@ def archive_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
             continue
 
         if record.status == JobStatus.running:
-            skipped.append(JobActionSkip(job_id=job_id, reason="Running iş arşivlenemez"))
+            skipped.append(JobActionSkip(job_id=job_id, reason="Running job cannot be archived"))
             continue
 
         record.archived = True
@@ -797,7 +797,7 @@ def delete_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
             continue
 
         if record.status == JobStatus.running:
-            skipped.append(JobActionSkip(job_id=job_id, reason="Running iş silinemez"))
+            skipped.append(JobActionSkip(job_id=job_id, reason="Running job cannot be deleted"))
             continue
 
         job_repository.delete(job_id)
@@ -822,16 +822,16 @@ def browse_media_root(
     root_map = _build_media_roots_map()
     root = root_map.get(root_key)
     if root is None:
-        raise HTTPException(status_code=404, detail="Kök dizin bulunamadı")
+        raise HTTPException(status_code=404, detail="Media root not found")
 
     target = (root.path / path).resolve()
     try:
         target.relative_to(root.path)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Geçersiz path") from exc
+        raise HTTPException(status_code=400, detail="Invalid path") from exc
 
     if not target.exists() or not target.is_dir():
-        raise HTTPException(status_code=404, detail="Dizin bulunamadı")
+        raise HTTPException(status_code=404, detail="Directory not found")
 
     all_entries: list[MediaBrowseEntryDto] = []
     query = q.lower() if q else None
@@ -878,19 +878,19 @@ def probe_media_subtitles(
     root_map = _build_media_roots_map()
     root = root_map.get(root_key)
     if root is None:
-        raise HTTPException(status_code=404, detail="Kök dizin bulunamadı")
+        raise HTTPException(status_code=404, detail="Media root not found")
 
     target = (root.path / path).resolve()
     try:
         target.relative_to(root.path)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Geçersiz path") from exc
+        raise HTTPException(status_code=400, detail="Invalid path") from exc
 
     if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+        raise HTTPException(status_code=404, detail="File not found")
 
     if target.suffix.lower() not in VIDEO_EXTENSIONS:
-        raise HTTPException(status_code=422, detail="path desteklenmeyen uzantı")
+        raise HTTPException(status_code=422, detail="Path has unsupported extension")
 
     normalized_path = target.relative_to(root.path).as_posix()
     cache_key = (root.key, normalized_path)
@@ -917,16 +917,16 @@ def probe_media_subtitles(
     try:
         probe_proc = subprocess.run(ffprobe_cmd, capture_output=True, text=True, check=False)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail="ffprobe çalıştırılamadı") from exc
+        raise HTTPException(status_code=500, detail="Failed to run ffprobe") from exc
 
     if probe_proc.returncode != 0:
         stderr_tail = (probe_proc.stderr or "ffprobe failed").strip()[-700:]
-        raise HTTPException(status_code=500, detail=f"ffprobe hatası: {stderr_tail}")
+        raise HTTPException(status_code=500, detail=f"ffprobe error: {stderr_tail}")
 
     try:
         raw_data: Any = json.loads(probe_proc.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="ffprobe çıktısı parse edilemedi") from exc
+        raise HTTPException(status_code=500, detail="Failed to parse ffprobe output") from exc
 
     streams = raw_data.get("streams", []) if isinstance(raw_data, dict) else []
     tracks: list[MediaSubtitleTrackDto] = []

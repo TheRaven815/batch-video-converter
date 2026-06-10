@@ -113,7 +113,7 @@ def test_list_jobs_filters_by_q_profile_root_and_date(monkeypatch: Any) -> None:
             "job-1",
             JobStatus.queued,
             profile="h264_mp4",
-            source_root_key="filmler",
+            source_root_key="movies",
             source_path="movies/cat.mp4",
             created_at="2026-05-01T10:00:00+00:00",
         ),
@@ -121,7 +121,7 @@ def test_list_jobs_filters_by_q_profile_root_and_date(monkeypatch: Any) -> None:
             "job-2",
             JobStatus.queued,
             profile="vp9_webm",
-            source_root_key="diziler",
+            source_root_key="series",
             source_path="shows/cat.webm",
             created_at="2026-05-02T10:00:00+00:00",
         ),
@@ -129,7 +129,7 @@ def test_list_jobs_filters_by_q_profile_root_and_date(monkeypatch: Any) -> None:
             "job-3",
             JobStatus.queued,
             profile="vp9_webm",
-            source_root_key="diziler",
+            source_root_key="series",
             source_path="shows/dog.webm",
             created_at="2026-05-03T10:00:00+00:00",
         ),
@@ -142,7 +142,7 @@ def test_list_jobs_filters_by_q_profile_root_and_date(monkeypatch: Any) -> None:
         response=Response(),
         q="cat",
         profile="vp9_webm",
-        source_root_key="diziler",
+        source_root_key="series",
         created_after="2026-05-02T00:00:00Z",
         created_before="2026-05-02T23:59:59Z",
     )
@@ -155,7 +155,7 @@ def test_list_jobs_filters_source_type_and_hides_archived(monkeypatch: Any) -> N
     records = {
         "legacy-1": _make_job("legacy-1", JobStatus.queued),
         "server-1": _make_job(
-            "server-1", JobStatus.queued, source_root_key="filmler", source_path="clip.mp4"
+            "server-1", JobStatus.queued, source_root_key="movies", source_path="clip.mp4"
         ),
         "archived-1": _make_job("archived-1", JobStatus.completed, archived=True),
     }
