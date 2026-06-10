@@ -18,8 +18,6 @@ from fastapi.staticfiles import StaticFiles
 
 from video_converter.core.config import (
     QUEUE_NAME,
-    JOBS_INDEX_KEY,
-    JOB_KEY_PREFIX,
     ensure_runtime_dirs,
     get_settings,
 )
