@@ -172,21 +172,21 @@ def _resolve_input_path(data: dict[str, Any]) -> Path:
             {root.key: root.path for root in settings.media_roots},
             str(source_root_key),
             str(source_path),
-            file_not_found_message="Kaynak dosya bulunamadı",
+            file_not_found_message="Source file not found",
         )
 
     input_filename = data.get("input_filename")
     if not input_filename:
-        raise ValueError("input_filename boş")
+        raise ValueError("input_filename is empty")
 
     candidate = (settings.input_dir / str(input_filename)).resolve()
     try:
         candidate.relative_to(settings.input_dir.resolve())
     except ValueError as exc:
-        raise ValueError("input_filename geçersiz") from exc
+        raise ValueError("input_filename is invalid") from exc
 
     if not candidate.exists() or not candidate.is_file():
-        raise ValueError("input dosyası bulunamadı")
+        raise ValueError("input file not found")
 
     return candidate
 
@@ -214,13 +214,13 @@ def _resolve_export_options(data: dict[str, Any]) -> tuple[str, str, str, str, s
     )
     subtitle_language = raw_subtitle_language if raw_subtitle_language else None
 
-    # Container/codec uyumluluğu için profil normalizasyonu:
-    # - WebM hedefinde VP9 profiline zorla (libx264 + webm hatalarını önler)
-    # - MP4/MKV hedefinde geçersiz/boş profil gelirse H.264 varsayılanına dön
+    # Profile normalization for container/codec compatibility:
+    # - Force VP9 profile on WebM target (prevents libx264 + webm errors)
+    # - Fallback to H.264 default on MP4/MKV target if invalid/empty profile received
     if video_export == "webm":
         profile = "vp9_webm"
-        # WebM konteynerinde stream copy sıkça uyumsuz codec hatasına yol açar (örn. AAC/AC3).
-        # Stabilite için kullanıcı "copy" seçse bile WebM'de Opus'a düşür.
+        # Stream copy in WebM container frequently causes incompatible codec errors (e.g. AAC/AC3).
+        # For stability, fallback copy to Opus in WebM even if user selects "copy".
         if audio_export == "copy":
             audio_export = "opus"
     elif profile not in {"h264_mp4", "h265_mp4", "vp9_webm"}:

@@ -36,23 +36,23 @@ def validate_source_path(
     source_path: str,
     *,
     supported_extensions: Collection[str] | None = None,
-    file_not_found_message: str = "source_path geçerli bir dosya değil",
+    file_not_found_message: str = "source_path is not a valid file",
 ) -> Path:
     root = media_roots.get(str(source_root_key))
     if root is None:
-        raise InvalidSourceRootKeyError("Geçersiz source_root_key")
+        raise InvalidSourceRootKeyError("Invalid source_root_key")
 
     root_path = _root_path(root).resolve()
     requested = (root_path / str(source_path)).resolve()
     try:
         requested.relative_to(root_path)
     except ValueError as exc:
-        raise SourcePathTraversalError("source_path kök dizin dışında") from exc
+        raise SourcePathTraversalError("source_path resolves outside the root directory") from exc
 
     if not requested.exists() or not requested.is_file():
         raise SourceFileNotFoundError(file_not_found_message)
 
     if supported_extensions is not None and requested.suffix.lower() not in supported_extensions:
-        raise UnsupportedSourceExtensionError("source_path desteklenmeyen uzantı")
+        raise UnsupportedSourceExtensionError("source_path has unsupported extension")
 
     return requested

@@ -490,44 +490,60 @@ function App() {
       <main className="workspace">
         {activePage === 'dashboard' ? (
           <section className="page-stack" aria-labelledby="dashboard-title">
-            <div className="page-heading dashboard-heading">
-              <div><p className="eyebrow">Main dashboard</p><h2 id="dashboard-title">Queue control and output overview</h2></div>
-              <div className="sync-strip"><span>{streamState === 'live' ? 'SSE live' : `Polling ${pollMs / 1000}s`}</span><span>Last sync {formatDate(lastSync)}</span></div>
+            <div className="page-heading">
+              <h2 id="dashboard-title">Dashboard</h2>
             </div>
             {streamState === 'fallback' ? <div className="fallback-banner" role="status">Live stream disconnected; polling fallback is active.</div> : null}
-            <div className="summary-grid compact-summary">
-              <SummaryCard label="Total" value={summary.all} tone="neutral" />
-              <SummaryCard label="Queued" value={summary.queued} tone="queued" />
-              <SummaryCard label="Running" value={summary.running} tone="running" />
-              <SummaryCard label="Done" value={summary.completed} tone="completed" />
-              <SummaryCard label="Failed" value={summary.failed} tone="failed" />
-            </div>
-            <div className="dashboard-grid compact-dashboard-grid">
-              <section className="card active-card compact-active-card" aria-label="Active conversion status">
-                <div className="active-compact-row">
-                  <div className="active-compact-copy"><span className="eyebrow">Active</span><strong>{runningJobs.length ? `${runningJobs.length} running` : 'Idle'}</strong><small>{activeJobs.length ? `${activeJobs.length} queued or active` : 'No running conversions'}</small></div>
-                  <div className="active-snapshot" aria-label="Current queue snapshot"><span><b>{summary.completed}</b><small>done</small></span><span><b>{workerHealth?.queue_depth ?? summary.queued}</b><small>queued</small></span><span><b>{workerHealth?.running_jobs ?? runningJobs.length}</b><small>worker</small></span></div>
-                </div>
-                <div className="active-summary-note" role="status">
-                  <strong>{runningJobs.length ? 'Conversions are running' : activeJobs.length ? 'Waiting in queue' : 'Queue is clear'}</strong>
-                  <span>{runningJobs.length ? 'Detailed progress stays in Jobs so the dashboard stays calm.' : activeJobs.length ? 'Jobs will start when the worker is ready.' : 'Create jobs from Convert when you are ready.'}</span>
-                </div>
-              </section>
-              <section className="card batches-card compact-batches-card">
-                <CardHeader title="Recent batches" badge={`${batches.length} batches`} />
-                <div className="batch-list">
-                  {batches.length ? batches.slice(0, 6).map((batch) => <div className="batch-row" key={batch.batch_id}><strong>{batch.batch_id.slice(0, 8)}</strong><span>{batch.total} jobs · {batch.completed} done · {batch.failed} failed</span><em>{batch.progress_percent}% batch progress</em></div>) : <EmptyState title="No batches yet" body="Create jobs in Convert." />}
-                </div>
-              </section>
-            </div>
-            <section className="card queue-card">
-              <div className="queue-toolbar">
-                <div><p className="eyebrow">Jobs workspace</p><h2>Queue, history and actions</h2></div>
-                <ViewTabs value={dashboardView} onChange={(v) => setDashboardView(v as DashboardView)} />
+            
+            <div className="stats-strip">
+              <div className="stats-item">
+                <span className="stats-val">{summary.all}</span>
+                <span className="stats-label">Total</span>
               </div>
-              <JobControls filters={filters} setFilters={setFilters} selectedCount={selectedJobIds.size} filteredJobs={filteredJobs} setSelectedJobIds={setSelectedJobIds} runBulkAction={runBulkAction} />
-              {dashboardView === 'outputs' ? <OutputsPanel outputs={outputs} /> : dashboardView === 'advanced' ? <AdvancedPanel streamState={streamState} workerHealth={workerHealth} roots={roots} /> : <JobList jobsLoading={jobsLoading} jobs={filteredJobs} selectedJobIds={selectedJobIds} setSelectedJobIds={setSelectedJobIds} setSelectedJobId={setSelectedJobId} refreshJobs={refreshJobs} cancelJob={(id) => cancelJob(id)} />}
-            </section>
+              <div className="stats-item">
+                <span className="stats-val orange">{summary.queued}</span>
+                <span className="stats-label">Queued</span>
+              </div>
+              <div className="stats-item">
+                <span className="stats-val blue">{summary.running}</span>
+                <span className="stats-label">Running</span>
+              </div>
+              <div className="stats-item">
+                <span className="stats-val green">{summary.completed}</span>
+                <span className="stats-label">Done</span>
+              </div>
+              <div className="stats-item">
+                <span className="stats-val red">{summary.failed}</span>
+                <span className="stats-label">Failed</span>
+              </div>
+            </div>
+
+            <div className="dashboard-workspace-grid">
+              <section className="card queue-card">
+                <div className="queue-toolbar">
+                  <ViewTabs value={dashboardView} onChange={(v) => setDashboardView(v as DashboardView)} />
+                </div>
+                <JobControls filters={filters} setFilters={setFilters} selectedCount={selectedJobIds.size} filteredJobs={filteredJobs} setSelectedJobIds={setSelectedJobIds} runBulkAction={runBulkAction} />
+                {dashboardView === 'outputs' ? <OutputsPanel outputs={outputs} /> : dashboardView === 'advanced' ? <AdvancedPanel streamState={streamState} workerHealth={workerHealth} roots={roots} /> : <JobList jobsLoading={jobsLoading} jobs={filteredJobs} selectedJobIds={selectedJobIds} setSelectedJobIds={setSelectedJobIds} setSelectedJobId={setSelectedJobId} refreshJobs={refreshJobs} cancelJob={(id) => cancelJob(id)} />}
+              </section>
+
+              <aside className="dashboard-sidebar">
+                <section className="card batches-card compact-batches-card">
+                  <CardHeader title="Recent batches" badge={`${batches.length} batches`} />
+                  <div className="batch-list">
+                    {batches.length ? batches.slice(0, 4).map((batch) => (
+                      <div className="batch-row" key={batch.batch_id}>
+                        <strong>{batch.batch_id.slice(0, 8)}</strong>
+                        <span>{batch.total} jobs · {batch.completed} done · {batch.failed} failed</span>
+                        <em>{batch.progress_percent}% batch progress</em>
+                      </div>
+                    )) : <EmptyState title="No batches yet" body="Create jobs in Convert." />}
+                  </div>
+                </section>
+
+                <OutputsPanel outputs={outputs} compact={true} />
+              </aside>
+            </div>
           </section>
         ) : null}
 

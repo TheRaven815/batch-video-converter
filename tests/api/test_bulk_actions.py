@@ -133,7 +133,7 @@ def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
     assert records["queued-1"].progress_phase == "cancelled"
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["done-1"] == "İş zaten sonlanmış durumda"
+    assert skip_map["done-1"] == "Job is already completed"
     assert skip_map["missing"] == "Job not found"
 
 
@@ -157,7 +157,7 @@ def test_archive_jobs_bulk_soft_deletes_non_running_records(monkeypatch: Any) ->
     assert "archive-1" not in fake_repository.queue
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["running-1"] == "Running iş arşivlenemez"
+    assert skip_map["running-1"] == "Running job cannot be archived"
     assert skip_map["missing"] == "Job not found"
 
 
@@ -183,5 +183,5 @@ def test_delete_jobs_bulk_skips_running_and_removes_persisted_records(monkeypatc
     assert f"{api.JOB_KEY_PREFIX}delete-1" in fake_repository.deleted_keys
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["running-1"] == "Running iş silinemez"
+    assert skip_map["running-1"] == "Running job cannot be deleted"
     assert skip_map["missing"] == "Job not found"

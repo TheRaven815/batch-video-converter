@@ -169,7 +169,7 @@ class JobIdsRequest(BaseModel):
             value = str(raw or "").strip()
             if value:
                 normalized.append(value)
-        # aynı id'leri tekilleştir
+        # Deduplicate identical IDs
         self.job_ids = list(dict.fromkeys(normalized))
         return self
 

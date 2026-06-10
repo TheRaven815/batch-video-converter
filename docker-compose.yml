@@ -10,9 +10,9 @@ services:
       - "8765:8765"
     volumes:
       - ./data:${DATA_ROOT:-/data}
-      # İhtiyacınız kadar medya mount satırı ekleyin/silin.
-      - ./media/filmler:/media/filmler:ro
-      - ./media/diziler:/media/diziler:ro
+      # Add/remove media mount lines as needed.
+      - ./media/movies:/media/movies:ro
+      - ./media/series:/media/series:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -36,9 +36,9 @@ services:
       - .env
     volumes:
       - ./data:${DATA_ROOT:-/data}
-      # İhtiyacınız kadar medya mount satırı ekleyin/silin.
-      - ./media/filmler:/media/filmler:ro
-      - ./media/diziler:/media/diziler:ro
+      # Add/remove media mount lines as needed.
+      - ./media/movies:/media/movies:ro
+      - ./media/series:/media/series:ro
     depends_on:
       redis:
         condition: service_healthy
