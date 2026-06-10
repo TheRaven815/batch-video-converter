@@ -384,9 +384,7 @@ def _parse_status_filter(status: str | JobStatus | None) -> set[JobStatus] | Non
         try:
             statuses.add(JobStatus(value))
         except ValueError as exc:
-            raise HTTPException(
-                status_code=422, detail=f"Invalid status filter: {value}"
-            ) from exc
+            raise HTTPException(status_code=422, detail=f"Invalid status filter: {value}") from exc
 
     return statuses or None
 
