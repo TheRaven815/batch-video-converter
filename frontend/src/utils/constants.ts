@@ -4,7 +4,7 @@ export const allowedExtensions = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm
 export const pollMs = 5000;
 export const presetStorageKey = 'video-converter-presets-v1';
 
-export type AppPage = 'dashboard' | 'convert' | 'presets';
+export type AppPage = 'dashboard' | 'convert' | 'presets' | 'settings';
 export type DashboardView = 'queue' | 'history' | 'outputs' | 'advanced';
 
 export type LocalPreset = {

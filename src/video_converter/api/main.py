@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import redis
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from video_converter.api.auth import get_current_user
+from video_converter.api.auth import router as auth_router
 from video_converter.core.config import (
     QUEUE_NAME,
     ensure_runtime_dirs,
@@ -79,6 +81,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Video Converter API", version="0.1.0", lifespan=lifespan)
+app.include_router(auth_router, prefix="/api/v1")
 
 
 _ERROR_CODE_BY_STATUS = {
@@ -224,14 +227,18 @@ def _get_job_record(job_id: str) -> JobRecord | None:
     return job_repository.get(job_id)
 
 
-@app.post("/api/v1/jobs", response_model=JobRecord)
+@app.post("/api/v1/jobs", response_model=JobRecord, dependencies=[Depends(get_current_user)])
 def create_job(payload: JobCreateRequest) -> JobRecord:
     record = _build_job_record(payload)
     _enqueue_job(record)
     return record
 
 
-@app.post("/api/v1/jobs/validate", response_model=JobValidationResponse)
+@app.post(
+    "/api/v1/jobs/validate",
+    response_model=JobValidationResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def validate_jobs(payload: JobBatchCreateRequest) -> JobValidationResponse:
     items: list[JobValidationItem] = []
     for index, item in enumerate(payload.jobs):
@@ -335,7 +342,11 @@ def _validate_and_build_batch(
     return records, errors
 
 
-@app.post("/api/v1/jobs/batch", response_model=JobBatchCreateResponse)
+@app.post(
+    "/api/v1/jobs/batch",
+    response_model=JobBatchCreateResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def create_jobs_batch(
     payload: JobBatchCreateRequest,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=200)] = None,
@@ -461,7 +472,7 @@ def _matches_job_filters(
     return True
 
 
-@app.get("/api/v1/jobs", response_model=list[JobRecord])
+@app.get("/api/v1/jobs", response_model=list[JobRecord], dependencies=[Depends(get_current_user)])
 def list_jobs(
     response: Response,
     status: Annotated[str | None, Query()] = None,
@@ -528,7 +539,9 @@ def _batch_summary_from_records(batch_id: str, records: list[JobRecord]) -> Batc
     return summary
 
 
-@app.get("/api/v1/batches", response_model=BatchListResponse)
+@app.get(
+    "/api/v1/batches", response_model=BatchListResponse, dependencies=[Depends(get_current_user)]
+)
 def list_batches(
     response: Response,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
@@ -554,7 +567,7 @@ def list_batches(
     )
 
 
-@app.get("/api/v1/jobs/stream")
+@app.get("/api/v1/jobs/stream", dependencies=[Depends(get_current_user)])
 def stream_jobs() -> StreamingResponse:
     def _events():
         last_snapshot = ""
@@ -578,7 +591,9 @@ def stream_jobs() -> StreamingResponse:
     return StreamingResponse(_events(), media_type="text/event-stream")
 
 
-@app.get("/api/v1/jobs/{job_id}", response_model=JobRecord)
+@app.get(
+    "/api/v1/jobs/{job_id}", response_model=JobRecord, dependencies=[Depends(get_current_user)]
+)
 def get_job(job_id: str) -> JobRecord:
     record = _get_job_record(job_id)
     if not record:
@@ -586,7 +601,11 @@ def get_job(job_id: str) -> JobRecord:
     return record
 
 
-@app.get("/api/v1/worker/health", response_model=WorkerHealthResponse)
+@app.get(
+    "/api/v1/worker/health",
+    response_model=WorkerHealthResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def worker_health() -> WorkerHealthResponse:
     redis_status = "ok"
     try:
@@ -620,7 +639,9 @@ def _safe_output_path(filename: str) -> Path:
     return output_path
 
 
-@app.get("/api/v1/outputs", response_model=OutputListResponse)
+@app.get(
+    "/api/v1/outputs", response_model=OutputListResponse, dependencies=[Depends(get_current_user)]
+)
 def list_outputs(
     response: Response,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
@@ -658,7 +679,7 @@ def list_outputs(
     )
 
 
-@app.get("/api/v1/outputs/{filename}/download")
+@app.get("/api/v1/outputs/{filename}/download", dependencies=[Depends(get_current_user)])
 def download_output(filename: str) -> FileResponse:
     output_path = _safe_output_path(filename)
     if not output_path.exists() or not output_path.is_file():
@@ -693,7 +714,11 @@ def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:
     return record, None
 
 
-@app.post("/api/v1/jobs/bulk/cancel", response_model=JobBulkActionResponse)
+@app.post(
+    "/api/v1/jobs/bulk/cancel",
+    response_model=JobBulkActionResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def cancel_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     updated: list[JobRecord] = []
     skipped: list[JobActionSkip] = []
@@ -712,7 +737,11 @@ def cancel_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     return JobBulkActionResponse(updated=updated, skipped=skipped)
 
 
-@app.post("/api/v1/jobs/{job_id}/cancel", response_model=JobRecord)
+@app.post(
+    "/api/v1/jobs/{job_id}/cancel",
+    response_model=JobRecord,
+    dependencies=[Depends(get_current_user)],
+)
 def cancel_job(job_id: str) -> JobRecord:
     record = _get_job_record(job_id)
     if not record:
@@ -722,7 +751,11 @@ def cancel_job(job_id: str) -> JobRecord:
     return updated
 
 
-@app.post("/api/v1/jobs/bulk/start", response_model=JobBulkActionResponse)
+@app.post(
+    "/api/v1/jobs/bulk/start",
+    response_model=JobBulkActionResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def start_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     updated: list[JobRecord] = []
     skipped: list[JobActionSkip] = []
@@ -759,7 +792,11 @@ def start_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     return JobBulkActionResponse(updated=updated, skipped=skipped)
 
 
-@app.post("/api/v1/jobs/bulk/archive", response_model=JobBulkActionResponse)
+@app.post(
+    "/api/v1/jobs/bulk/archive",
+    response_model=JobBulkActionResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def archive_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     updated: list[JobRecord] = []
     skipped: list[JobActionSkip] = []
@@ -783,7 +820,11 @@ def archive_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     return JobBulkActionResponse(updated=updated, skipped=skipped)
 
 
-@app.post("/api/v1/jobs/bulk/delete", response_model=JobBulkActionResponse)
+@app.post(
+    "/api/v1/jobs/bulk/delete",
+    response_model=JobBulkActionResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def delete_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     updated: list[JobRecord] = []
     skipped: list[JobActionSkip] = []
@@ -804,12 +845,20 @@ def delete_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     return JobBulkActionResponse(updated=updated, skipped=skipped)
 
 
-@app.get("/api/v1/media/roots", response_model=list[MediaRootDto])
+@app.get(
+    "/api/v1/media/roots",
+    response_model=list[MediaRootDto],
+    dependencies=[Depends(get_current_user)],
+)
 def list_media_roots() -> list[MediaRootDto]:
     return [MediaRootDto(key=root.key, label=root.label) for root in settings.media_roots]
 
 
-@app.get("/api/v1/media/browse", response_model=MediaBrowseResponse)
+@app.get(
+    "/api/v1/media/browse",
+    response_model=MediaBrowseResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def browse_media_root(
     root_key: Annotated[str, Query(min_length=1, max_length=64)],
     path: Annotated[str, Query(max_length=2048)] = "",
@@ -868,7 +917,11 @@ def browse_media_root(
     )
 
 
-@app.get("/api/v1/media/subtitles", response_model=MediaSubtitleProbeResponse)
+@app.get(
+    "/api/v1/media/subtitles",
+    response_model=MediaSubtitleProbeResponse,
+    dependencies=[Depends(get_current_user)],
+)
 def probe_media_subtitles(
     root_key: Annotated[str, Query(min_length=1, max_length=64)],
     path: Annotated[str, Query(min_length=1, max_length=2048)],

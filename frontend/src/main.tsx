@@ -69,8 +69,12 @@ import {
   OutputsPanel,
   AdvancedPanel,
 } from './components/ui';
+import { LoginPage } from './components/LoginPage';
+import { SettingsPanel } from './components/SettingsPanel';
+import { getAuthToken } from './api';
 
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(!!getAuthToken());
   const [roots, setRoots] = useState<MediaRootDto[]>([]);
   const [selectedRootKey, setSelectedRootKey] = useState('');
   const [currentPath, setCurrentPath] = useState('');
@@ -93,7 +97,27 @@ function App() {
   const [toast, setToast] = useState<string>('');
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const [activePage, setActivePage] = useState<AppPage>('dashboard');
+  const [activePage, setActivePage] = useState<AppPage>(() => {
+    const hash = window.location.hash.replace('#', '');
+    return (hash === 'dashboard' || hash === 'convert' || hash === 'presets' || hash === 'settings') ? hash as AppPage : 'dashboard';
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '');
+      if (hash === 'dashboard' || hash === 'convert' || hash === 'presets' || hash === 'settings') {
+        setActivePage(hash as AppPage);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (window.location.hash.replace('#', '') !== activePage) {
+      window.location.hash = activePage;
+    }
+  }, [activePage]);
   const [dashboardView, setDashboardView] = useState<DashboardView>('queue');
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'fallback'>('connecting');
   const [announcement, setAnnouncement] = useState('Queue updates will be announced here.');
@@ -221,8 +245,9 @@ function App() {
   }, [browserQuery, currentPath, selectedRootKey, showToast]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     void loadRoots();
-  }, [loadRoots]);
+  }, [loadRoots, isAuthenticated]);
 
   useEffect(() => () => {
     if (manualRefreshFeedbackTimer.current) window.clearTimeout(manualRefreshFeedbackTimer.current);
@@ -230,14 +255,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     if (document.visibilityState === 'visible') void refreshJobs(jobsLoaded.current ? 'background' : 'initial');
-  }, [refreshJobs]);
+  }, [refreshJobs, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     if (selectedRootKey) void openPath('');
-  }, [selectedRootKey]);
+  }, [selectedRootKey, isAuthenticated, openPath]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     let stream: EventSource | null = null;
 
     const clearPolling = () => {
@@ -269,7 +297,8 @@ function App() {
     };
 
     if (typeof EventSource !== 'undefined') {
-      stream = new EventSource('/api/v1/jobs/stream');
+      const token = getAuthToken();
+      stream = new EventSource(token ? `/api/v1/jobs/stream?token=${token}` : '/api/v1/jobs/stream');
       stream.onopen = () => {
         sseActiveRef.current = true;
         setStreamState('live');
@@ -307,7 +336,7 @@ function App() {
       stream?.close();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshJobs]);
+  }, [refreshJobs, isAuthenticated]);
 
   const addSelectedToStage = useCallback(async () => {
     if (!selectedRoot) return;
@@ -463,6 +492,10 @@ function App() {
     </div>
   );
 
+  if (!isAuthenticated) {
+    return <LoginPage onLogin={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -470,9 +503,9 @@ function App() {
           <h1>Video Converter</h1>
         </div>
         <nav className="main-tabs" role="tablist" aria-label="Primary workflow">
-          {(['dashboard', 'convert', 'presets'] as const).map((page) => (
+          {(['dashboard', 'convert', 'presets', 'settings'] as const).map((page) => (
             <button key={page} type="button" role="tab" aria-selected={activePage === page} className={`main-tab ${activePage === page ? 'active' : ''}`} onClick={() => setActivePage(page)}>
-              {page === 'dashboard' ? 'Dashboard' : page === 'convert' ? 'Convert' : 'Presets'}
+              {page === 'dashboard' ? 'Dashboard' : page === 'convert' ? 'Convert' : page === 'presets' ? 'Presets' : 'Settings'}
             </button>
           ))}
         </nav>
@@ -614,6 +647,18 @@ function App() {
                 {presets.length ? presets.map((preset) => <article className="preset-tile" key={preset.id}><div><strong>{preset.name}</strong><small>{preset.description || 'No description'}</small></div><div className="preset-meta"><span>{preset.settings.video_export}/{preset.settings.audio_export}/{preset.settings.subtitle_export}</span><span>{formatDate(preset.updatedAt)}</span></div><div className="preset-actions"><button className="primary-button tiny" type="button" onClick={() => applyPreset(preset.id)}>Apply</button><button className="ghost-button tiny" type="button" onClick={() => startEditPreset(preset)}>Edit</button><button className="danger-button tiny" type="button" onClick={() => deletePreset(preset.id)}>Delete</button></div></article>) : <EmptyState title="No presets saved" body="Create reusable settings here, then apply them from the Convert tab." />}
               </div>
             </section>
+          </section>
+        ) : null}
+
+        {activePage === 'settings' ? (
+          <section className="settings-layout" aria-labelledby="settings-title">
+            <div className="page-heading">
+              <div>
+                <p className="eyebrow">User Management</p>
+                <h2 id="settings-title">Security & Credentials</h2>
+              </div>
+            </div>
+            <SettingsPanel />
           </section>
         ) : null}
       </main>

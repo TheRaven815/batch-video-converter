@@ -24,6 +24,7 @@ REQUIRED_MODULES = {
     "uvicorn": "uvicorn[standard]",
     "redis": "redis",
     "pydantic": "pydantic",
+    "jwt": "PyJWT",
 }
 
 

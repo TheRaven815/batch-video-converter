@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -29,6 +30,9 @@ class Settings:
     data_dir: Path
     media_roots: tuple[MediaRoot, ...]
     worker_concurrency: int = 1
+    app_username: str = "admin"
+    app_password: str = "12345678"
+    jwt_secret: str = ""
 
 
 def _derive_key_from_label(label: str, used_keys: set[str]) -> str:
@@ -83,6 +87,7 @@ def _parse_media_roots(raw_value: str, *, input_dir: Path) -> tuple[MediaRoot, .
     return tuple(roots)
 
 
+@lru_cache()
 def get_settings() -> Settings:
     data_root = Path(os.getenv("DATA_ROOT", "/data"))
     input_dir = data_root / "input"
@@ -100,6 +105,14 @@ def get_settings() -> Settings:
     except ValueError:
         worker_concurrency = 1
 
+    app_username = os.getenv("APP_USERNAME", "admin")
+    app_password = os.getenv("APP_PASSWORD", "12345678")
+    jwt_secret = os.getenv("JWT_SECRET")
+    if not jwt_secret:
+        import secrets
+
+        jwt_secret = secrets.token_hex(32)
+
     return Settings(
         redis_url=os.getenv("REDIS_URL", "redis://redis:6379/0"),
         data_root=data_root,
@@ -110,6 +123,9 @@ def get_settings() -> Settings:
         data_dir=data_dir,
         media_roots=media_roots,
         worker_concurrency=worker_concurrency,
+        app_username=app_username,
+        app_password=app_password,
+        jwt_secret=jwt_secret,
     )
 
 

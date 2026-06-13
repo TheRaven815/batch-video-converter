@@ -15,14 +15,35 @@ import type {
   WorkerHealthResponse,
 } from './models';
 
+let authToken: string | null = localStorage.getItem('video-converter-auth-token');
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+  if (token) {
+    localStorage.setItem('video-converter-auth-token', token);
+  } else {
+    localStorage.removeItem('video-converter-auth-token');
+  }
+}
+
+export function getAuthToken() {
+  return authToken;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set('Accept', 'application/json');
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (authToken) {
+    headers.set('Authorization', `Bearer ${authToken}`);
+  }
+
   const response = await fetch(path, {
     ...init,
-    headers: {
-      Accept: 'application/json',
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init?.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -74,8 +95,21 @@ export async function listJobs(filters: Partial<JobFilters>, limit = 250, cursor
   if (filters.q?.trim()) params.set('q', filters.q.trim());
   if (filters.profile?.trim()) params.set('profile', filters.profile.trim());
   if (filters.sourceType && filters.sourceType !== 'all') params.set('source_type', filters.sourceType);
-  const response = await fetch(`/api/v1/jobs?${params.toString()}`, { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`GET /api/v1/jobs failed with ${response.status}`);
+  
+  const headers = new Headers();
+  headers.set('Accept', 'application/json');
+  if (authToken) {
+    headers.set('Authorization', `Bearer ${authToken}`);
+  }
+  
+  const response = await fetch(`/api/v1/jobs?${params.toString()}`, { headers });
+  if (!response.ok) {
+    if (response.status === 401) {
+       setAuthToken(null);
+       window.location.reload();
+    }
+    throw new Error(`GET /api/v1/jobs failed with ${response.status}`);
+  }
   return { jobs: (await response.json()) as JobRecord[], nextCursor: response.headers.get('X-Next-Cursor') };
 }
 
@@ -135,4 +169,45 @@ export async function bulkDelete(jobIds: string[]): Promise<JobBulkActionRespons
 export async function listOutputs(limit = 50): Promise<OutputListResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   return request<OutputListResponse>(`/api/v1/outputs?${params.toString()}`);
+}
+
+export async function authLogin(username: string, password: string): Promise<string> {
+  const params = new URLSearchParams();
+  params.append('username', username);
+  params.append('password', password);
+
+  const response = await fetch('/api/v1/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error('Invalid username or password');
+  }
+
+  const data = await response.json();
+  return data.access_token;
+}
+
+export async function requestPasswordReset(): Promise<void> {
+  const response = await fetch('/api/v1/auth/forgot-password', {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to request password reset');
+  }
+}
+
+export async function updateCredentials(currentPassword: string, newUsername?: string, newPassword?: string): Promise<void> {
+  const body: Record<string, string> = { current_password: currentPassword };
+  if (newUsername) body.new_username = newUsername;
+  if (newPassword) body.new_password = newPassword;
+
+  await request<any>('/api/v1/auth/credentials', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
 }
