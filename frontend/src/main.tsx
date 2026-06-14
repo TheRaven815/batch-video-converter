@@ -60,7 +60,6 @@ import {
 import {
   HealthPill,
   CardHeader,
-  SummaryCard,
   StatusBadge,
   EmptyState,
   ViewTabs,
@@ -146,9 +145,6 @@ function App() {
     return sortJobs(base, filters.sort);
   }, [dashboardView, jobs, filters.sort]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === selectedJobId) || null, [jobs, selectedJobId]);
-  const activeJobs = useMemo(() => jobs.filter((job) => ['queued', 'running'].includes(job.status)), [jobs]);
-  const runningJobs = useMemo(() => jobs.filter((job) => job.status === 'running'), [jobs]);
-
   const summary = useMemo(() => {
     const counts: Record<JobStatus | 'all', number> = { all: jobs.length, queued: 0, running: 0, cancelled: 0, completed: 0, failed: 0 };
     jobs.forEach((job) => {
