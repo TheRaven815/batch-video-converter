@@ -461,3 +461,19 @@ select option, select optgroup { background-color: #0d1421; color: var(--text); 
   cursor: wait;
 }
 
+.login-form .text-button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.5rem;
+  transition: color var(--motion-fast);
+  margin-top: -0.5rem;
+}
+
+.login-form .text-button:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+}
+

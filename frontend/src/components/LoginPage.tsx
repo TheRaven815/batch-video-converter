@@ -14,9 +14,9 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
       setError('');
       setInfo('');
       await requestPasswordReset();
-      setInfo('Geçici şifre oluşturuldu ve sunucu (Docker) loglarına yazdırıldı. Lütfen logları kontrol edin.');
+      setInfo('Temporary password generated and printed to server logs. Please check the logs.');
     } catch (err) {
-      setError('Şifre sıfırlama isteği başarısız oldu.');
+      setError('Password reset request failed.');
     } finally {
       setLoading(false);
     }
@@ -98,9 +98,8 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
               className="text-button" 
               onClick={handleForgotPassword}
               disabled={loading}
-              style={{ fontSize: '0.9rem', color: 'var(--gray)' }}
             >
-              Şifremi Unuttum?
+              Forgot Password?
             </button>
           </div>
         </form>

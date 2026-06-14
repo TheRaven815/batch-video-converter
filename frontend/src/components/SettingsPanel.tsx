@@ -38,9 +38,9 @@ export function SettingsPanel() {
   return (
     <div className="settings-container" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6) 0' }}>
       <div className="card" style={{ width: '100%', maxWidth: '480px' }}>
-        <div className="card-header">
+        <div className="card-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.3rem', marginBottom: 'var(--space-4)' }}>
           <h3 className="card-title">Security Settings</h3>
-          <p className="card-subtitle">Update your username and password.</p>
+          <p className="card-subtitle" style={{ margin: 0, color: 'var(--muted)', fontSize: '0.82rem' }}>Update your username and password.</p>
         </div>
 
         <form onSubmit={handleSubmit} style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }} autoComplete="off">
