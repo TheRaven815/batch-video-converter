@@ -17,7 +17,11 @@ from urllib.parse import urlparse
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_REDIS_URL = "redis://localhost:6380/0"
 DEFAULT_DATA_ROOT = "./data"
-DEFAULT_MEDIA_MOUNTS = "Movies=./media/movies;Series=./media/series"
+DEFAULT_MEDIA_MOUNTS = (
+    f"Videos={ (Path.home() / 'Videos').as_posix() };Documents={ (Path.home() / 'Documents').as_posix() }"
+    if os.name == "nt"
+    else "Movies=./media/movies;Series=./media/series"
+)
 DEFAULT_STORAGE = "local"
 REQUIRED_MODULES = {
     "fastapi": "fastapi",

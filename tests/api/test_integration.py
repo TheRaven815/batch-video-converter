@@ -135,8 +135,13 @@ def integration_client(
     monkeypatch.setattr(api, "job_repository", JobRepository(fake_redis))
     api._subtitle_probe_cache.clear()
 
-    with TestClient(api.app) as client:
-        yield client, fake_redis, media_root
+    # Override authentication dependency for testing
+    api.app.dependency_overrides[api.get_current_user] = lambda: "admin"
+    try:
+        with TestClient(api.app) as client:
+            yield client, fake_redis, media_root
+    finally:
+        api.app.dependency_overrides.clear()
 
 
 def _make_job(job_id: str, status: JobStatus, *, input_filename: str | None = None) -> JobRecord:

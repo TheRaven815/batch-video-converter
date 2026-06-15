@@ -225,7 +225,7 @@ function App() {
     }
   }, [showToast]);
 
-  const openPath = useCallback(async (path = currentPath, query = browserQuery) => {
+  const openPath = useCallback(async (path = '', query = '') => {
     if (!selectedRootKey) return;
     setBrowserLoading(true);
     try {
@@ -238,7 +238,7 @@ function App() {
     } finally {
       setBrowserLoading(false);
     }
-  }, [browserQuery, currentPath, selectedRootKey, showToast]);
+  }, [selectedRootKey, showToast]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
