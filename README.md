@@ -6,6 +6,8 @@ The application keeps source media read-only, writes runtime data under a single
 
 ## Features
 
+- **Authentication**: JWT-based secure login system for the web UI and API endpoints.
+- **Dark Theme UI**: A sleek, responsive dark theme with a dedicated settings panel.
 - Server-side media browser backed by configured `MEDIA_MOUNTS` roots.
 - Batch job creation with validation and idempotent `Idempotency-Key` support.
 - FFmpeg worker with progress, telemetry, log tail, graceful shutdown, and stale running job recovery.
@@ -30,8 +32,9 @@ Browser UI
 Key parts:
 
 - `src/video_converter/api/main.py`: FastAPI app, API endpoints, job creation, media browsing, subtitle probing, output downloads, SSE stream, and static frontend serving.
+- `src/video_converter/api/auth.py`: JWT token generation, password verification, and authentication dependency.
 - `src/video_converter/worker/main.py`: Worker loop, queue consumption, input/output path resolution, export option normalization, FFmpeg command construction, progress parsing, and shutdown handling.
-- `src/video_converter/core/config.py`: Environment parsing, `Settings`, media root parsing, `DATA_ROOT` subdirectories, and queue constants.
+- `src/video_converter/core/config.py`: Environment parsing, `Settings`, media root parsing, `DATA_ROOT` subdirectories, auth credentials, and queue constants.
 - `src/video_converter/core/models.py`: Pydantic API and job models; this is the backend contract source of truth.
 - `src/video_converter/core/path_validation.py`: Root-relative source path validation and path traversal protection.
 - `src/video_converter/core/storage.py`: Redis storage or SQLite-backed local storage.
@@ -260,6 +263,9 @@ If you use a domain or Coolify reverse proxy and do not want a direct host port,
 | `DATA_ROOT` | `/data` | Writable application root. The app creates `input`, `outputs`, `temp`, `logs`, and `data` under it. |
 | `MEDIA_MOUNTS` | `Label=/container/path;Label2=/container/path2` | Read-only media roots shown in the UI. If empty, the app falls back to `DATA_ROOT/input`. |
 | `WORKER_CONCURRENCY` | `1` | Number of jobs processed concurrently by the worker. Increase only when CPU/RAM/IO capacity is sufficient. |
+| `APP_USERNAME` | `admin` | Username for accessing the web UI and API. |
+| `APP_PASSWORD` | `12345678` | Password for accessing the web UI and API. |
+| `JWT_SECRET` | *(Random)* | Secret key used to sign JWT authentication tokens. Generates randomly on startup if not set. |
 
 Important rules:
 
@@ -270,12 +276,16 @@ Important rules:
 
 ## API Summary
 
-Health and readiness:
+Health and readiness (Unauthenticated):
 
 - `GET /health/live`
 - `GET /health/ready`
 
-Jobs and batches:
+Authentication:
+
+- `POST /api/v1/auth/token` accepts OAuth2 form data (`username`, `password`) to issue a JWT access token.
+
+Jobs and batches (Require Bearer Token):
 
 - `POST /api/v1/jobs` creates a single job.
 - `POST /api/v1/jobs/validate` validates a batch payload without enqueueing jobs.
@@ -290,7 +300,7 @@ Jobs and batches:
 - `POST /api/v1/jobs/bulk/archive` archives jobs.
 - `POST /api/v1/jobs/bulk/delete` deletes jobs.
 
-Media and outputs:
+Media and outputs (Require Bearer Token):
 
 - `GET /api/v1/media/roots` lists configured media roots.
 - `GET /api/v1/media/browse?root_key=...&path=...&q=...` browses a root-relative path.
@@ -324,16 +334,17 @@ Supported source video extensions are `mp4`, `mov`, `mkv`, `avi`, `webm`, `m4v`,
 ## Frontend Usage
 
 1. Open `http://localhost:8765/` for the built UI or the Vite dev URL during frontend development.
-2. Use the media browser to select files from configured server roots.
-3. Add selected files to the staging list and remove or select entries as needed.
-4. Choose export settings:
+2. Log in using the configured `APP_USERNAME` and `APP_PASSWORD` (defaults to `admin` / `12345678`).
+3. Use the media browser to select files from configured server roots.
+4. Add selected files to the staging list and remove or select entries as needed.
+5. Choose export settings:
    - Video output container: MP4, MKV, or WebM.
    - Audio mode/codec: copy, AAC, MP3, or Opus.
    - Subtitle mode: none, embedded, or separate SRT.
    - Subtitle language: detected dynamically from selected media when available.
-5. Create jobs and monitor queue status, progress, batch summaries, worker health, and recent outputs.
-6. Use bulk actions for cancel, start/requeue, archive, or delete where eligible.
-7. Download completed outputs from the outputs panel.
+6. Create jobs and monitor queue status, progress, batch summaries, worker health, and recent outputs.
+7. Use bulk actions for cancel, start/requeue, archive, or delete where eligible.
+8. Download completed outputs from the outputs panel.
 
 ## Test Commands
 

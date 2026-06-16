@@ -156,6 +156,7 @@ class WorkerHealthResponse(BaseModel):
     redis: str
     queue_depth: int
     running_jobs: int
+    cpu_percent: float
     checked_at: str
 
 

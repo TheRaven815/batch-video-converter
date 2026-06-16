@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
+import psutil
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -626,6 +627,7 @@ def worker_health() -> WorkerHealthResponse:
         redis=redis_status,
         queue_depth=queue_depth,
         running_jobs=running_jobs,
+        cpu_percent=psutil.cpu_percent(interval=None),
         checked_at=now_iso(),
     )
 
@@ -888,10 +890,19 @@ def browse_media_root(
         parent_rel = parent.relative_to(root.path).as_posix()
         all_entries.append(MediaBrowseEntryDto(type="dir", name="..", rel_path=parent_rel))
 
+    resolved_root = root.path.resolve()
+
     for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
         if child.name.startswith("."):
             continue
         if query and query not in child.name.lower():
+            continue
+
+        try:
+            if not child.resolve().is_relative_to(resolved_root):
+                continue
+        except (OSError, RuntimeError):
+            # Skip files with broken symlinks or permission errors on resolve
             continue
 
         rel = child.relative_to(root.path).as_posix()

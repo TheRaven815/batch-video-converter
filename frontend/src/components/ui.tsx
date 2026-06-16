@@ -71,9 +71,7 @@ export function OutputsPanel({ outputs, compact = false, onClear }: { outputs: O
 }
 
 export function SystemResourcesPanel({ workerHealth }: { workerHealth: WorkerHealthResponse | null }) {
-  // Simple simulated or derived stats since actual CPU/RAM might not be in workerHealth
-  const hasRunning = workerHealth && workerHealth.running_jobs > 0;
-  const cpuPercent = hasRunning ? 45 : 12;
+  const cpuPercent = workerHealth?.cpu_percent ?? 0;
   
   return (
     <div className="sidebar-panel">

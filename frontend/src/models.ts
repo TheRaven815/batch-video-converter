@@ -14,6 +14,7 @@ export interface WorkerHealthResponse {
   redis: string;
   queue_depth: number;
   running_jobs: number;
+  cpu_percent: number;
   checked_at: string;
 }
 

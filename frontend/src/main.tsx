@@ -67,7 +67,7 @@ import {
 } from './components/ui';
 import { LoginPage } from './components/LoginPage';
 import { SettingsPanel } from './components/SettingsPanel';
-import { Video, RotateCw, Plus, Folder, FileVideo, HardDrive, Settings, Sliders, CheckCircle2, AlertTriangle, Info, Search, Trash2, Play } from 'lucide-react';
+import { Video, RotateCw, Plus, Folder, FileVideo, HardDrive, Settings, Sliders, CheckCircle2, AlertTriangle, Info, Search, Trash2, Play, Menu, X } from 'lucide-react';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!getAuthToken());
@@ -97,6 +97,8 @@ function App() {
     const hash = window.location.hash.replace('#', '');
     return (hash === 'dashboard' || hash === 'convert' || hash === 'presets' || hash === 'settings') ? hash as AppPage : 'dashboard';
   });
+
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'fallback'>('connecting');
   const [submitSummary, setSubmitSummary] = useState('');
@@ -373,20 +375,28 @@ function App() {
       <header className="app-header">
         <div className="header-container">
           <div className="header-left">
+            <button className="mobile-menu-btn" onClick={() => setIsMobileMenuOpen(true)}>
+              <Menu size={20} />
+            </button>
             <div className="brand">
               <div className="brand-icon">
                 <Video size={16} />
               </div>
-              <span className="font-semibold text-sm tracking-tight text-zinc-100">Video Converter</span>
-              <span className="brand-version">v0.1.5</span>
+              <span className="font-semibold text-sm tracking-tight text-zinc-100 hidden-xs">Video Converter</span>
+              <span className="brand-version hidden-xs">v0.1.5</span>
             </div>
 
-            <nav className="nav-tabs">
-              <button className={`nav-tab ${activePage === 'dashboard' ? 'active' : ''}`} onClick={() => setActivePage('dashboard')}>Dashboard</button>
-              <button className={`nav-tab ${activePage === 'convert' ? 'active' : ''}`} onClick={() => setActivePage('convert')}>Convert</button>
-              <button className={`nav-tab ${activePage === 'presets' ? 'active' : ''}`} onClick={() => setActivePage('presets')}>Presets</button>
-              <button className={`nav-tab ${activePage === 'settings' ? 'active' : ''}`} onClick={() => setActivePage('settings')}>Settings</button>
+            <nav className={`nav-tabs ${isMobileMenuOpen ? 'mobile-open' : ''}`}>
+              <div className="mobile-nav-header">
+                <span className="font-semibold text-zinc-100">Menu</span>
+                <button className="btn-icon" onClick={() => setIsMobileMenuOpen(false)}><X size={18} /></button>
+              </div>
+              <button className={`nav-tab ${activePage === 'dashboard' ? 'active' : ''}`} onClick={() => { setActivePage('dashboard'); setIsMobileMenuOpen(false); }}>Dashboard</button>
+              <button className={`nav-tab ${activePage === 'convert' ? 'active' : ''}`} onClick={() => { setActivePage('convert'); setIsMobileMenuOpen(false); }}>Convert</button>
+              <button className={`nav-tab ${activePage === 'presets' ? 'active' : ''}`} onClick={() => { setActivePage('presets'); setIsMobileMenuOpen(false); }}>Presets</button>
+              <button className={`nav-tab ${activePage === 'settings' ? 'active' : ''}`} onClick={() => { setActivePage('settings'); setIsMobileMenuOpen(false); }}>Settings</button>
             </nav>
+            {isMobileMenuOpen && <div className="mobile-overlay" onClick={() => setIsMobileMenuOpen(false)}></div>}
           </div>
 
           <div className="header-right">
