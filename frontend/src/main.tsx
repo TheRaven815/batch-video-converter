@@ -15,6 +15,7 @@ import {
   listJobs,
   listMediaRoots,
   listOutputs,
+  clearOutputs,
   probeSubtitles,
   validateJobs,
   getAuthToken,
@@ -89,7 +90,6 @@ function App() {
   const [jobsLoading, setJobsLoading] = useState(true);
   const [jobsRefreshing, setJobsRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   
@@ -107,7 +107,6 @@ function App() {
   const [presets, setPresets] = useState<LocalPreset[]>(() => loadStoredPresets());
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
-  const toastTimer = useRef<number | null>(null);
   const refreshInFlight = useRef(false);
   const jobsLoaded = useRef(false);
   const sseActiveRef = useRef(false);
@@ -133,10 +132,15 @@ function App() {
     return counts;
   }, [jobs]);
 
+  const [toasts, setToasts] = useState<Array<{ id: number; msg: string; type: 'success' | 'error' | 'info' }>>([]);
+  const toastIdRef = useRef(0);
+
   const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info' = 'info') => {
-    setToast({ msg, type });
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 4000);
+    const id = ++toastIdRef.current;
+    setToasts(prev => [...prev, { id, msg, type }]);
+    window.setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
   }, []);
 
   const refreshJobs = useCallback(async (mode: 'initial' | 'background' | 'manual' = 'background') => {
@@ -328,6 +332,24 @@ function App() {
     return () => { clearPolling(); sseActiveRef.current = false; stream?.close(); document.removeEventListener('visibilitychange', handleVisibilityChange); };
   }, [refreshJobs, isAuthenticated]);
 
+  useEffect(() => {
+    if (!isAuthenticated || activePage !== 'dashboard') return;
+    
+    const updateHealth = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const worker = await getWorkerHealth();
+          setWorkerHealth(worker);
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    const timer = window.setInterval(updateHealth, 3000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, activePage]);
+
   const runBulkAction = useCallback(async (action: 'cancel' | 'start' | 'archive' | 'delete') => {
     const ids = [...selectedJobIds];
     if (!ids.length) { showToast('Select at least one job first.', 'error'); return; }
@@ -383,7 +405,7 @@ function App() {
                 <Video size={16} />
               </div>
               <span className="font-semibold text-sm tracking-tight text-zinc-100 hidden-xs">Video Converter</span>
-              <span className="brand-version hidden-xs">v0.1.5</span>
+              <span className="brand-version hidden-xs">v0.1.6</span>
             </div>
 
             <nav className={`nav-tabs ${isMobileMenuOpen ? 'mobile-open' : ''}`}>
@@ -414,14 +436,14 @@ function App() {
       </header>
 
       <div className="notification-area">
-        {toast && (
-          <div className="toast">
-            {toast.type === 'success' && <CheckCircle2 size={16} className="text-emerald-400" />}
-            {toast.type === 'error' && <AlertTriangle size={16} className="text-rose-400" />}
-            {toast.type === 'info' && <Info size={16} className="text-blue-400" />}
-            <span className="text-zinc-200 font-medium">{toast.msg}</span>
+        {toasts.map(t => (
+          <div key={t.id} className="toast">
+            {t.type === 'success' && <CheckCircle2 size={16} className="text-emerald-400" />}
+            {t.type === 'error' && <AlertTriangle size={16} className="text-rose-400" />}
+            {t.type === 'info' && <Info size={16} className="text-blue-400" />}
+            <span className="text-zinc-200 font-medium">{t.msg}</span>
           </div>
-        )}
+        ))}
       </div>
 
       <main className="main-container">
@@ -501,7 +523,20 @@ function App() {
               </div>
 
               <div className="dashboard-sidebar">
-                <OutputsPanel outputs={outputs} />
+                <OutputsPanel 
+                  outputs={outputs} 
+                  onClear={async () => {
+                    if (window.confirm('Are you sure you want to delete all output files? This cannot be undone.')) {
+                      try {
+                        const res = await clearOutputs();
+                        showToast(`Deleted ${res.deleted} output files.`, 'success');
+                        await refreshJobs('background');
+                      } catch (error) {
+                        showToast('Failed to clear outputs.', 'error');
+                      }
+                    }
+                  }}
+                />
                 <SystemResourcesPanel workerHealth={workerHealth} />
               </div>
             </div>
@@ -740,7 +775,7 @@ function App() {
               <p className="text-xs text-zinc-400 mt-0.5">Configuration and limits.</p>
             </div>
             <div className="form-panel">
-              <SettingsPanel />
+              <SettingsPanel showToast={showToast} />
             </div>
           </div>
         )}

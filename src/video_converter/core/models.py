@@ -223,3 +223,7 @@ class HealthResponse(BaseModel):
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class SystemSettings(BaseModel):
+    worker_concurrency: int = Field(default=1, ge=1, le=8)

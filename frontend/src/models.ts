@@ -191,3 +191,7 @@ export interface JobFilters {
   profile: string;
   sourceType: 'all' | 'server' | 'legacy';
 }
+
+export interface SystemSettings {
+  worker_concurrency: number;
+}

@@ -50,7 +50,16 @@ export function OutputsPanel({ outputs, compact = false, onClear }: { outputs: O
           <Archive size={14} className="text-zinc-400" />
           <span>Recent Outputs</span>
         </span>
-        <span className="text-xs font-mono text-zinc-500 px-1 bg-zinc-950 border border-zinc-800 rounded">{outputs.length} Files</span>
+        <div className="flex items-center gap-2">
+          {onClear && outputs.length > 0 && (
+            <button onClick={onClear} className="text-zinc-500 hover:text-rose-400 transition-colors" title="Clear All Outputs">
+              <Trash2 size={14} />
+            </button>
+          )}
+          <span className="text-xs font-mono text-zinc-500">
+            {outputs.length} Files
+          </span>
+        </div>
       </div>
       <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
         {outputs.length ? outputs.slice(0, compact ? 6 : 20).map((output) => (
@@ -80,12 +89,20 @@ export function SystemResourcesPanel({ workerHealth }: { workerHealth: WorkerHea
           <Cpu size={14} className="text-zinc-400" />
           <span>System Resources</span>
         </span>
-        <span className="text-xs font-mono text-emerald-500">Stable</span>
+        {!workerHealth ? (
+          <span className="text-xs font-mono text-zinc-500">Offline</span>
+        ) : cpuPercent > 85 ? (
+          <span className="text-xs font-mono text-rose-500">High Load</span>
+        ) : cpuPercent > 50 ? (
+          <span className="text-xs font-mono text-amber-500">Moderate</span>
+        ) : (
+          <span className="text-xs font-mono text-emerald-500">Stable</span>
+        )}
       </div>
       
       <div className="resource-item">
         <div className="resource-label">
-          <span>Worker CPU</span>
+          <span>CPU Usage</span>
           <span className="font-mono">{cpuPercent}%</span>
         </div>
         <div className="resource-track">

@@ -13,6 +13,7 @@ import type {
   OutputListResponse,
   StructuredErrorResponse,
   WorkerHealthResponse,
+  SystemSettings,
 } from './models';
 
 let authToken: string | null = localStorage.getItem('video-converter-auth-token');
@@ -171,6 +172,10 @@ export async function listOutputs(limit = 50): Promise<OutputListResponse> {
   return request<OutputListResponse>(`/api/v1/outputs?${params.toString()}`);
 }
 
+export async function clearOutputs(): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>('/api/v1/outputs', { method: 'DELETE' });
+}
+
 export async function authLogin(username: string, password: string): Promise<string> {
   const params = new URLSearchParams();
   params.append('username', username);
@@ -209,5 +214,16 @@ export async function updateCredentials(currentPassword: string, newUsername?: s
   await request<any>('/api/v1/auth/credentials', {
     method: 'PUT',
     body: JSON.stringify(body),
+  });
+}
+
+export async function getSystemSettings(): Promise<SystemSettings> {
+  return request<SystemSettings>('/api/v1/settings');
+}
+
+export async function updateSystemSettings(settings: SystemSettings): Promise<SystemSettings> {
+  return request<SystemSettings>('/api/v1/settings', {
+    method: 'POST',
+    body: JSON.stringify(settings),
   });
 }

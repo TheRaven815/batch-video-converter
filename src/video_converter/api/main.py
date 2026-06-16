@@ -50,6 +50,7 @@ from video_converter.core.models import (
     OutputListResponse,
     StructuredErrorResponse,
     WorkerHealthResponse,
+    SystemSettings,
     now_iso,
 )
 from video_converter.core.path_validation import validate_source_path
@@ -687,6 +688,40 @@ def download_output(filename: str) -> FileResponse:
     if not output_path.exists() or not output_path.is_file():
         raise HTTPException(status_code=404, detail="Output not found")
     return FileResponse(output_path, filename=output_path.name)
+
+
+@app.delete("/api/v1/outputs", dependencies=[Depends(get_current_user)])
+def clear_outputs() -> dict[str, int]:
+    outputs_dir = settings.outputs_dir.resolve()
+    if not outputs_dir.exists():
+        return {"deleted": 0}
+
+    count = 0
+    for child in outputs_dir.iterdir():
+        if child.is_file() and not child.name.startswith("."):
+            try:
+                child.unlink()
+                count += 1
+            except Exception as exc:
+                logger.error("Failed to delete %s: %s", child, exc)
+    return {"deleted": count}
+
+
+@app.get("/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)])
+def get_system_settings() -> SystemSettings:
+    raw = storage_client.get("system:settings")
+    if raw:
+        try:
+            return SystemSettings.model_validate_json(raw)
+        except Exception:
+            pass
+    return SystemSettings(worker_concurrency=settings.worker_concurrency)
+
+
+@app.post("/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)])
+def update_system_settings(payload: SystemSettings) -> SystemSettings:
+    storage_client.set("system:settings", payload.model_dump_json())
+    return payload
 
 
 def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:

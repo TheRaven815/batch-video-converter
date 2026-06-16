@@ -686,11 +686,22 @@ def process_job(job_id: str) -> None:
         _shutdown.unregister_job(job_id)
 
 
-def _run_concurrent(concurrency: int) -> None:
+def _get_dynamic_concurrency() -> int:
+    try:
+        raw = storage_client.get("system:settings")
+        if raw:
+            data = json.loads(raw)
+            return int(data.get("worker_concurrency", settings.worker_concurrency))
+    except Exception:
+        pass
+    return settings.worker_concurrency
+
+
+def _run_concurrent(max_pool_size: int) -> None:
     """Run the worker loop with concurrent job processing via a thread pool."""
     active_futures: dict[Future[None], str] = {}
 
-    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="job") as executor:
+    with ThreadPoolExecutor(max_workers=max_pool_size, thread_name_prefix="job") as executor:
         while not _shutdown.is_shutting_down:
             # Reap completed futures to free tracking slots
             for future in [f for f in active_futures if f.done()]:
@@ -700,8 +711,11 @@ def _run_concurrent(concurrency: int) -> None:
                 except Exception:
                     logger.exception("unhandled exception in job thread", extra={"job_id": jid})
 
-            # If all pool slots are occupied, wait briefly before trying to fetch
-            if len(active_futures) >= concurrency:
+            # Check dynamic concurrency setting
+            dynamic_concurrency = _get_dynamic_concurrency()
+
+            # If dynamic limit reached, wait briefly before trying to fetch
+            if len(active_futures) >= dynamic_concurrency:
                 time.sleep(0.5)
                 continue
 
@@ -714,9 +728,10 @@ def _run_concurrent(concurrency: int) -> None:
                 future = executor.submit(process_job, job_id)
                 active_futures[future] = job_id
                 logger.info(
-                    "dispatched job (%d/%d slots active)",
+                    "dispatched job (%d/%d active, max %d slots)",
                     len(active_futures),
-                    concurrency,
+                    dynamic_concurrency,
+                    max_pool_size,
                     extra={"job_id": job_id},
                 )
             except redis.RedisError:
@@ -786,10 +801,9 @@ def run() -> None:
         if recovered:
             logger.info("recovered %s stale running jobs", len(recovered), extra={"job_id": "-"})
 
-    if concurrency > 1:
-        _run_concurrent(concurrency)
-    else:
-        _run_single()
+    # We use a fixed upper bound pool size so threads can scale up to this limit dynamically.
+    pool_size = max(8, concurrency)
+    _run_concurrent(pool_size)
 
     # Post-loop cleanup: safety net to catch any jobs still marked as running
     _shutdown.graceful_shutdown(proc_timeout=5.0)
