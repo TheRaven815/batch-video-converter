@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { authLogin, setAuthToken, requestPasswordReset } from '../api';
+import { Video } from 'lucide-react';
 
 export function LoginPage({ onLogin }: { onLogin: () => void }) {
   const [username, setUsername] = useState('admin');
@@ -45,59 +46,60 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
   };
 
   return (
-    <div className="login-container">
-      <div className="login-card card">
-        <div className="login-header">
-          <div className="login-logo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
+    <div className="login-wrapper">
+      <div className="login-card">
+        <div className="login-header-group">
+          <div className="brand-icon" style={{ padding: '0.75rem', marginBottom: '0.5rem' }}>
+            <Video size={24} />
           </div>
-          <h2>Video Converter</h2>
-          <p className="eyebrow">Secure Access</p>
+          <h2 className="text-lg font-semibold text-zinc-100" style={{ margin: 0 }}>Video Converter</h2>
+          <p className="text-xs text-zinc-400" style={{ margin: 0 }}>Secure Access</p>
         </div>
         
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="field-grid">
-            <label>
-              Username
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter APP_USERNAME"
-                disabled={loading}
-              />
-            </label>
-            <label>
-              Password
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter APP_PASSWORD"
-                autoFocus
-                disabled={loading}
-              />
-            </label>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div className="form-group">
+            <label className="form-label">Username</label>
+            <input
+              type="text"
+              className="form-input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter APP_USERNAME"
+              disabled={loading}
+            />
           </div>
           
-          {error && <div className="login-error" role="alert">{error}</div>}
-          {info && <div className="login-error" style={{ background: 'rgba(72, 255, 122, 0.1)', borderColor: 'rgba(72, 255, 122, 0.25)', color: 'var(--green)' }} role="alert">{info}</div>}
+          <div className="form-group">
+            <label className="form-label">Password</label>
+            <input
+              type="password"
+              className="form-input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter APP_PASSWORD"
+              autoFocus
+              disabled={loading}
+            />
+          </div>
           
-          <div className="submit-actions" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
+          {error && <div className="text-xs text-rose-400 p-2 border border-rose-900 rounded bg-rose-950/30" role="alert">{error}</div>}
+          {info && <div className="text-xs text-emerald-400 p-2 border border-emerald-900 rounded bg-emerald-950/30" role="alert">{info}</div>}
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
             <button 
               type="submit" 
-              className={`primary-button glow full ${loading ? 'loading' : ''}`}
+              className="btn btn-primary w-full justify-center"
               disabled={loading}
+              style={{ padding: '0.5rem' }}
             >
               {loading ? 'Authenticating...' : 'Sign In'}
             </button>
             <button 
               type="button" 
-              className="text-button" 
+              className="btn btn-outline w-full justify-center" 
               onClick={handleForgotPassword}
               disabled={loading}
+              style={{ padding: '0.5rem', border: 'none', backgroundColor: 'transparent' }}
             >
               Forgot Password?
             </button>

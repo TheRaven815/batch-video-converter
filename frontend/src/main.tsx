@@ -17,6 +17,7 @@ import {
   listOutputs,
   probeSubtitles,
   validateJobs,
+  getAuthToken,
 } from './api';
 import type {
   AudioExport,
@@ -41,15 +42,14 @@ import {
   pollMs,
   defaultSettings,
   loadStoredPresets,
+  presetStorageKey,
   type AppPage,
-  type DashboardView,
   type LocalPreset,
 } from './utils/constants';
 import {
   deriveProfile,
   fileName,
   formatDate,
-  formatEta,
   mergeJobs,
   mergeOutputs,
   normalizeStatus,
@@ -59,18 +59,15 @@ import {
 } from './utils/helpers';
 import {
   HealthPill,
-  CardHeader,
-  StatusBadge,
   EmptyState,
-  ViewTabs,
   JobControls,
   JobList,
   OutputsPanel,
-  AdvancedPanel,
+  SystemResourcesPanel,
 } from './components/ui';
 import { LoginPage } from './components/LoginPage';
 import { SettingsPanel } from './components/SettingsPanel';
-import { getAuthToken } from './api';
+import { Video, RotateCw, Plus, Folder, FileVideo, HardDrive, Settings, Sliders, CheckCircle2, AlertTriangle, Info, Search, Trash2, Play } from 'lucide-react';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!getAuthToken());
@@ -91,46 +88,24 @@ function App() {
   const [browserLoading, setBrowserLoading] = useState(false);
   const [jobsLoading, setJobsLoading] = useState(true);
   const [jobsRefreshing, setJobsRefreshing] = useState(false);
-  const [manualRefreshFeedback, setManualRefreshFeedback] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState<string>('');
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  
   const [activePage, setActivePage] = useState<AppPage>(() => {
     const hash = window.location.hash.replace('#', '');
     return (hash === 'dashboard' || hash === 'convert' || hash === 'presets' || hash === 'settings') ? hash as AppPage : 'dashboard';
   });
 
-  useEffect(() => {
-    const handleHashChange = () => {
-      const hash = window.location.hash.replace('#', '');
-      if (hash === 'dashboard' || hash === 'convert' || hash === 'presets' || hash === 'settings') {
-        setActivePage(hash as AppPage);
-      }
-    };
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, []);
-
-  useEffect(() => {
-    if (window.location.hash.replace('#', '') !== activePage) {
-      window.location.hash = activePage;
-    }
-  }, [activePage]);
-  const [dashboardView, setDashboardView] = useState<DashboardView>('queue');
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'fallback'>('connecting');
-  const [announcement, setAnnouncement] = useState('Queue updates will be announced here.');
   const [submitSummary, setSubmitSummary] = useState('');
   const [filters, setFilters] = useState<JobFilters>({ q: '', status: 'all', sort: 'newest', profile: '', sourceType: 'all' });
   const [settings, setSettings] = useState<ExportSettings>(defaultSettings);
   const [presets, setPresets] = useState<LocalPreset[]>(() => loadStoredPresets());
   const [selectedPresetId, setSelectedPresetId] = useState('');
-  const [presetName, setPresetName] = useState('');
-  const [presetDescription, setPresetDescription] = useState('');
-  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 
   const toastTimer = useRef<number | null>(null);
-  const manualRefreshFeedbackTimer = useRef<number | null>(null);
   const refreshInFlight = useRef(false);
   const jobsLoaded = useRef(false);
   const sseActiveRef = useRef(false);
@@ -140,49 +115,41 @@ function App() {
   const selectedEntries = useMemo(() => entries.filter((entry) => entry.type === 'file' && selectedPaths.has(entry.rel_path)), [entries, selectedPaths]);
   const selectedStageCount = staged.filter((item) => item.selected).length;
   const subtitleLanguages = useMemo(() => uniqueLanguages(staged), [staged]);
-  const filteredJobs = useMemo(() => {
-    const base = dashboardView === 'history' ? jobs.filter((job) => ['completed', 'failed', 'cancelled'].includes(job.status)) : jobs;
-    return sortJobs(base, filters.sort);
-  }, [dashboardView, jobs, filters.sort]);
-  const selectedJob = useMemo(() => jobs.find((job) => job.id === selectedJobId) || null, [jobs, selectedJobId]);
+  const filteredJobs = useMemo(() => sortJobs(jobs.filter(job => {
+    const sMatch = filters.status === 'all' || normalizeStatus(job.status) === filters.status;
+    const qMatch = !filters.q || (job.input_filename || job.source_path || job.id).toLowerCase().includes(filters.q.toLowerCase());
+    const pMatch = !filters.profile || job.profile === filters.profile;
+    return sMatch && qMatch && pMatch;
+  }), filters.sort), [jobs, filters]);
+
   const summary = useMemo(() => {
     const counts: Record<JobStatus | 'all', number> = { all: jobs.length, queued: 0, running: 0, cancelled: 0, completed: 0, failed: 0 };
     jobs.forEach((job) => {
       const status = normalizeStatus(job.status) as JobStatus;
-      counts[status] += 1;
+      counts[status] = (counts[status] || 0) + 1;
     });
     return counts;
   }, [jobs]);
 
-  const persistPresets = useCallback((next: LocalPreset[]) => {
-    setPresets(next);
-    localStorage.setItem('video-converter-presets-v1', JSON.stringify(next));
-  }, []);
-
-  const showToast = useCallback((message: string) => {
-    setToast(message);
+  const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ msg, type });
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(''), 4200);
+    toastTimer.current = window.setTimeout(() => setToast(null), 4000);
   }, []);
 
-  const keepManualRefreshFeedbackVisible = useCallback(() => {
-    setManualRefreshFeedback(true);
-    if (manualRefreshFeedbackTimer.current) window.clearTimeout(manualRefreshFeedbackTimer.current);
-    manualRefreshFeedbackTimer.current = window.setTimeout(() => setManualRefreshFeedback(false), 900);
-  }, []);
-
-  const refreshJobs = useCallback(async (mode: 'initial' | 'background' = 'background') => {
+  const refreshJobs = useCallback(async (mode: 'initial' | 'background' | 'manual' = 'background') => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
-    const initialLoad = mode === 'initial' && !jobsLoaded.current;
-    if (initialLoad) setJobsLoading(true);
+    if (mode === 'initial' && !jobsLoaded.current) setJobsLoading(true);
     else setJobsRefreshing(true);
+    
+    const startTime = Date.now();
     try {
       const [live, ready, worker, jobResult, outputList, batchList] = await Promise.all([
         getLiveHealth(),
         getReadyHealth(),
         getWorkerHealth().catch(() => null),
-        listJobs(filters),
+        listJobs({ ...filters, status: 'all', profile: '' }), // fetch all to apply local filters
         listOutputs().catch(() => ({ outputs: [] })),
         listBatches().catch(() => ({ batches: [] })),
       ]);
@@ -196,24 +163,70 @@ function App() {
     } catch (error) {
       setApiHealthy(false);
       setRedisHealthy(false);
-      showToast(error instanceof Error ? error.message : 'Failed to refresh queue');
+      // Optional: silent fail on background refresh
     } finally {
-      jobsLoaded.current = true;
-      refreshInFlight.current = false;
-      setJobsLoading(false);
-      setJobsRefreshing(false);
+      const finishRefresh = () => {
+        jobsLoaded.current = true;
+        refreshInFlight.current = false;
+        setJobsLoading(false);
+        setJobsRefreshing(false);
+        if (mode === 'manual') showToast('Data refreshed successfully', 'success');
+      };
+
+      const elapsed = Date.now() - startTime;
+      if (mode === 'manual' && elapsed < 600) {
+        setTimeout(finishRefresh, 600 - elapsed);
+      } else {
+        finishRefresh();
+      }
     }
   }, [filters, showToast]);
 
-  const handleManualRefresh = useCallback(async () => {
-    setManualRefreshFeedback(true);
-    if (manualRefreshFeedbackTimer.current) window.clearTimeout(manualRefreshFeedbackTimer.current);
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [presetName, setPresetName] = useState('');
+  const [presetDescription, setPresetDescription] = useState('');
+
+  const persistPresets = useCallback((newPresets: LocalPreset[]) => {
     try {
-      await refreshJobs('background');
-    } finally {
-      keepManualRefreshFeedbackVisible();
+      localStorage.setItem(presetStorageKey, JSON.stringify(newPresets));
+    } catch { /* ignore */ }
+    setPresets(newPresets);
+  }, []);
+
+  const startEditPreset = useCallback((preset: LocalPreset) => {
+    setEditingPresetId(preset.id);
+    setPresetName(preset.name);
+    setPresetDescription(preset.description || '');
+    setSettings(preset.settings);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const resetPresetForm = useCallback(() => {
+    setEditingPresetId(null);
+    setPresetName('');
+    setPresetDescription('');
+    setSettings(defaultSettings);
+  }, []);
+
+  const savePreset = useCallback(() => {
+    const name = presetName.trim();
+    if (!name) {
+      return;
     }
-  }, [keepManualRefreshFeedbackVisible, refreshJobs]);
+    const now = new Date().toISOString();
+    const next = editingPresetId
+      ? presets.map(p => p.id === editingPresetId ? { ...p, name, description: presetDescription.trim(), settings: { ...settings }, updatedAt: now } : p)
+      : [...presets, { id: createPresetId(), name, description: presetDescription.trim(), settings: { ...settings }, createdAt: now, updatedAt: now }];
+    
+    persistPresets(next);
+    resetPresetForm();
+  }, [editingPresetId, persistPresets, presetDescription, presetName, presets, resetPresetForm, settings]);
+
+  const deletePreset = useCallback((presetId: string) => {
+    const next = presets.filter(p => p.id !== presetId);
+    persistPresets(next);
+    if (editingPresetId === presetId) resetPresetForm();
+  }, [editingPresetId, persistPresets, presets, resetPresetForm]);
 
   const loadRoots = useCallback(async () => {
     try {
@@ -221,7 +234,7 @@ function App() {
       setRoots(data);
       setSelectedRootKey((current) => (current && data.some((root) => root.key === current) ? current : data[0]?.key || ''));
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to load media roots');
+      showToast('Failed to load media roots', 'error');
     }
   }, [showToast]);
 
@@ -234,7 +247,7 @@ function App() {
       setEntries(data.entries || []);
       setSelectedPaths(new Set());
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to browse media');
+      showToast('Failed to browse media', 'error');
     } finally {
       setBrowserLoading(false);
     }
@@ -245,10 +258,11 @@ function App() {
     void loadRoots();
   }, [loadRoots, isAuthenticated]);
 
-  useEffect(() => () => {
-    if (manualRefreshFeedbackTimer.current) window.clearTimeout(manualRefreshFeedbackTimer.current);
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-  }, []);
+  useEffect(() => {
+    if (window.location.hash.replace('#', '') !== activePage) {
+      window.location.hash = activePage;
+    }
+  }, [activePage]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -281,12 +295,8 @@ function App() {
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        if (sseActiveRef.current) {
-          clearPolling();
-        } else {
-          void refreshJobs('background');
-          startPolling();
-        }
+        if (sseActiveRef.current) clearPolling();
+        else { void refreshJobs('background'); startPolling(); }
       } else {
         clearPolling();
       }
@@ -295,381 +305,453 @@ function App() {
     if (typeof EventSource !== 'undefined') {
       const token = getAuthToken();
       stream = new EventSource(token ? `/api/v1/jobs/stream?token=${token}` : '/api/v1/jobs/stream');
-      stream.onopen = () => {
-        sseActiveRef.current = true;
-        setStreamState('live');
-        clearPolling();
-      };
-      stream.onerror = () => {
-        sseActiveRef.current = false;
-        setStreamState('fallback');
-        startPolling();
-      };
+      stream.onopen = () => { sseActiveRef.current = true; setStreamState('live'); clearPolling(); };
+      stream.onerror = () => { sseActiveRef.current = false; setStreamState('fallback'); startPolling(); };
       stream.addEventListener('jobs_snapshot', (event) => {
         try {
           const payload = JSON.parse((event as MessageEvent).data) as JobStreamPayload;
           if (payload.data.jobs) {
             setJobs((current) => mergeJobs(current, payload.data.jobs || []));
             setLastSync(payload.timestamp);
-            setAnnouncement(`Live queue update received for ${payload.data.jobs.length} jobs.`);
           }
         } catch {
-          sseActiveRef.current = false;
-          setStreamState('fallback');
-          startPolling();
+          sseActiveRef.current = false; setStreamState('fallback'); startPolling();
         }
       });
     } else {
-      sseActiveRef.current = false;
-      setStreamState('fallback');
-      startPolling();
+      sseActiveRef.current = false; setStreamState('fallback'); startPolling();
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      clearPolling();
-      sseActiveRef.current = false;
-      stream?.close();
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
+    return () => { clearPolling(); sseActiveRef.current = false; stream?.close(); document.removeEventListener('visibilitychange', handleVisibilityChange); };
   }, [refreshJobs, isAuthenticated]);
-
-  const addSelectedToStage = useCallback(async () => {
-    if (!selectedRoot) return;
-    if (!selectedEntries.length) {
-      showToast('Select at least one video file from the server browser.');
-      return;
-    }
-    const existing = new Set(staged.map((item) => `${item.rootKey}:${item.sourcePath}`));
-    const nextItems = selectedEntries
-      .filter((entry) => allowedExtensions.has((entry.name.split('.').pop() || '').toLowerCase()))
-      .filter((entry) => !existing.has(`${selectedRoot.key}:${entry.rel_path}`))
-      .map<StagedServerFile>((entry) => ({ id: `${selectedRoot.key}:${entry.rel_path}`, rootKey: selectedRoot.key, rootLabel: selectedRoot.label, sourcePath: entry.rel_path, name: entry.name, selected: true, subtitleProbeStatus: 'idle' }));
-    if (!nextItems.length) {
-      showToast('Selected files are already staged.');
-      return;
-    }
-    setStaged((items) => [...items, ...nextItems]);
-    setSelectedPaths(new Set());
-    showToast(`${nextItems.length} file${nextItems.length > 1 ? 's' : ''} added to staging.`);
-    await Promise.all(nextItems.map(async (item) => {
-      setStaged((items) => items.map((stage) => (stage.id === item.id ? { ...stage, subtitleProbeStatus: 'loading' } : stage)));
-      try {
-        const probe = await probeSubtitles(item.rootKey, item.sourcePath);
-        const languages = [...new Set(probe.tracks.map((track) => track.language || 'und'))].sort();
-        setStaged((items) => items.map((stage) => (stage.id === item.id ? { ...stage, subtitleProbeStatus: 'done', subtitleTrackCount: probe.tracks.length, subtitleLanguages: languages } : stage)));
-      } catch {
-        setStaged((items) => items.map((stage) => (stage.id === item.id ? { ...stage, subtitleProbeStatus: 'error' } : stage)));
-      }
-    }));
-  }, [selectedEntries, selectedRoot, showToast, staged]);
-
-  const buildPayload = useCallback((items: StagedServerFile[]) => items.map((item) => ({
-    input_filename: item.name,
-    source_root_key: item.rootKey,
-    source_path: item.sourcePath,
-    profile: deriveProfile(settings.video_export),
-    video_export: settings.video_export,
-    audio_export: settings.audio_export,
-    subtitle_export: settings.subtitle_export,
-    subtitle_language: settings.subtitle_language || null,
-  })), [settings]);
-
-  const validateStaging = useCallback(async () => {
-    const selected = staged.filter((item) => item.selected);
-    if (!selected.length) {
-      showToast('Select staged items before validation.');
-      return false;
-    }
-    const result = await validateJobs(buildPayload(selected));
-    setSubmitSummary(`${result.valid_count} valid, ${result.invalid_count} invalid.`);
-    if (result.invalid_count) showToast(result.items.filter((item) => !item.valid).map((item) => item.message).join('; '));
-    else showToast('All selected staged items are valid.');
-    return result.invalid_count === 0;
-  }, [buildPayload, showToast, staged]);
-
-  const submitBatch = useCallback(async () => {
-    const selected = staged.filter((item) => item.selected);
-    if (!selected.length) {
-      showToast('Select at least one staged item before creating jobs.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const payload = buildPayload(selected);
-      const validation = await validateJobs(payload);
-      if (validation.invalid_count) {
-        setSubmitSummary(`${validation.valid_count} valid, ${validation.invalid_count} invalid. Clear invalid items before submitting.`);
-        showToast('Validation failed; jobs were not queued.');
-        return;
-      }
-      const response = await createJobsBatch(payload);
-      setStaged((items) => items.filter((item) => !selected.some((submitted) => submitted.id === item.id)));
-      setSubmitSummary(`${response.jobs.length} queued successfully, 0 failed.`);
-      setAnnouncement(`${response.jobs.length} jobs queued successfully.`);
-      showToast(`${response.jobs.length} job${response.jobs.length > 1 ? 's' : ''} queued.`);
-      setActivePage('dashboard');
-      await refreshJobs();
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to create jobs');
-    } finally {
-      setSubmitting(false);
-    }
-  }, [buildPayload, refreshJobs, showToast, staged]);
 
   const runBulkAction = useCallback(async (action: 'cancel' | 'start' | 'archive' | 'delete') => {
     const ids = [...selectedJobIds];
-    if (!ids.length) {
-      showToast('Select at least one job first.');
-      return;
-    }
+    if (!ids.length) { showToast('Select at least one job first.', 'error'); return; }
     try {
       const result = action === 'cancel' ? await bulkCancel(ids) : action === 'start' ? await bulkStart(ids) : action === 'archive' ? await bulkArchive(ids) : await bulkDelete(ids);
       setSelectedJobIds(new Set());
-      showToast(`${result.updated.length} updated${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}.`);
-      await refreshJobs();
+      showToast(`${result.updated.length} jobs ${action}ed.`, 'success');
+      await refreshJobs('background');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : `Bulk ${action} failed`);
+      showToast(`Action ${action} failed.`, 'error');
     }
   }, [refreshJobs, selectedJobIds, showToast]);
 
-  const applyPreset = useCallback((presetId: string) => {
-    setSelectedPresetId(presetId);
-    const preset = presets.find((item) => item.id === presetId);
-    if (!preset) return;
-    setSettings(preset.settings);
-    showToast(`Preset applied: ${preset.name}`);
-  }, [presets, showToast]);
-
-  const startEditPreset = useCallback((preset: LocalPreset) => {
-    setEditingPresetId(preset.id);
-    setPresetName(preset.name);
-    setPresetDescription(preset.description);
-    setSettings(preset.settings);
-    setActivePage('presets');
-  }, []);
-
-  const resetPresetForm = useCallback(() => {
-    setEditingPresetId(null);
-    setPresetName('');
-    setPresetDescription('');
-  }, []);
-
-  const savePreset = useCallback(() => {
-    const name = presetName.trim();
-    if (!name) {
-      showToast('Preset name is required.');
-      return;
+  const submitBatch = useCallback(async () => {
+    const selected = staged.filter((item) => item.selected);
+    if (!selected.length) { showToast('Select staged items.', 'error'); return; }
+    setSubmitting(true);
+    try {
+      const payload = selected.map((item) => ({
+        input_filename: item.name,
+        source_root_key: item.rootKey,
+        source_path: item.sourcePath,
+        profile: deriveProfile(settings.video_export),
+        video_export: settings.video_export,
+        audio_export: settings.audio_export,
+        subtitle_export: settings.subtitle_export,
+        subtitle_language: settings.subtitle_language || null,
+      }));
+      const response = await createJobsBatch(payload);
+      setStaged((items) => items.filter((item) => !selected.some((submitted) => submitted.id === item.id)));
+      showToast(`${response.jobs.length} jobs queued successfully.`, 'success');
+      setActivePage('dashboard');
+      await refreshJobs('background');
+    } catch (error) {
+      showToast('Failed to create jobs', 'error');
+    } finally {
+      setSubmitting(false);
     }
-    const now = new Date().toISOString();
-    const next = editingPresetId
-      ? presets.map((preset) => (preset.id === editingPresetId ? { ...preset, name, description: presetDescription.trim(), settings: { ...settings }, updatedAt: now } : preset))
-      : [{ id: createPresetId(), name, description: presetDescription.trim(), settings: { ...settings }, createdAt: now, updatedAt: now }, ...presets];
-    persistPresets(next);
-    resetPresetForm();
-    showToast(editingPresetId ? 'Preset updated.' : 'Preset saved.');
-  }, [editingPresetId, persistPresets, presetDescription, presetName, presets, resetPresetForm, settings, showToast]);
+  }, [refreshJobs, settings, showToast, staged]);
 
-  const deletePreset = useCallback((presetId: string) => {
-    persistPresets(presets.filter((preset) => preset.id !== presetId));
-    if (selectedPresetId === presetId) setSelectedPresetId('');
-    if (editingPresetId === presetId) resetPresetForm();
-    showToast('Preset deleted.');
-  }, [editingPresetId, persistPresets, presets, resetPresetForm, selectedPresetId, showToast]);
-
-  const refreshButtonActive = jobsRefreshing || manualRefreshFeedback;
-
-  const exportSettingsForm = (
-    <div className="field-grid two dense-fields">
-      <label>Video container<select value={settings.video_export} onChange={(event) => setSettings((value) => ({ ...value, video_export: event.target.value as VideoExport }))}>{(['mp4', 'mkv', 'webm'] as const).map((option) => <option key={option} value={option}>{option.toUpperCase()}</option>)}</select></label>
-      <label>Audio<select value={settings.audio_export} onChange={(event) => setSettings((value) => ({ ...value, audio_export: event.target.value as AudioExport }))}>{(['copy', 'aac', 'mp3', 'opus'] as const).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-      <label>Subtitles<select value={settings.subtitle_export} onChange={(event) => setSettings((value) => ({ ...value, subtitle_export: event.target.value as SubtitleExport }))}>{(['none', 'embedded', 'separate_srt'] as const).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-      <label>Language<select value={settings.subtitle_language} onChange={(event) => setSettings((value) => ({ ...value, subtitle_language: event.target.value }))}><option value="">Auto / first available</option>{subtitleLanguages.map((lang) => <option key={lang} value={lang}>{lang}</option>)}</select></label>
-    </div>
-  );
-
-  if (!isAuthenticated) {
-    return <LoginPage onLogin={() => setIsAuthenticated(true)} />;
-  }
+  if (!isAuthenticated) return <LoginPage onLogin={() => setIsAuthenticated(true)} />;
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand-block">
-          <h1>Video Converter</h1>
-        </div>
-        <nav className="main-tabs" role="tablist" aria-label="Primary workflow">
-          {(['dashboard', 'convert', 'presets', 'settings'] as const).map((page) => (
-            <button key={page} type="button" role="tab" aria-selected={activePage === page} className={`main-tab ${activePage === page ? 'active' : ''}`} onClick={() => setActivePage(page)}>
-              {page === 'dashboard' ? 'Dashboard' : page === 'convert' ? 'Convert' : page === 'presets' ? 'Presets' : 'Settings'}
+    <>
+      <header className="app-header">
+        <div className="header-container">
+          <div className="header-left">
+            <div className="brand">
+              <div className="brand-icon">
+                <Video size={16} />
+              </div>
+              <span className="font-semibold text-sm tracking-tight text-zinc-100">Video Converter</span>
+              <span className="brand-version">v0.1.5</span>
+            </div>
+
+            <nav className="nav-tabs">
+              <button className={`nav-tab ${activePage === 'dashboard' ? 'active' : ''}`} onClick={() => setActivePage('dashboard')}>Dashboard</button>
+              <button className={`nav-tab ${activePage === 'convert' ? 'active' : ''}`} onClick={() => setActivePage('convert')}>Convert</button>
+              <button className={`nav-tab ${activePage === 'presets' ? 'active' : ''}`} onClick={() => setActivePage('presets')}>Presets</button>
+              <button className={`nav-tab ${activePage === 'settings' ? 'active' : ''}`} onClick={() => setActivePage('settings')}>Settings</button>
+            </nav>
+          </div>
+
+          <div className="header-right">
+            <div className="service-status">
+              <HealthPill label="API" ok={apiHealthy} />
+              <HealthPill label="Redis" ok={redisHealthy} />
+              <HealthPill label="Worker" ok={workerHealth?.status === 'ok'} meta={workerHealth ? `${workerHealth.running_jobs} Active` : undefined} />
+            </div>
+            <button className="btn btn-outline" onClick={() => refreshJobs('manual')} disabled={jobsRefreshing}>
+              <RotateCw size={14} className={jobsRefreshing ? 'spin' : ''} />
+              <span>Refresh</span>
             </button>
-          ))}
-        </nav>
-        <div className="health-cluster" aria-live="polite">
-          <HealthPill label="API" ok={apiHealthy} />
-          <HealthPill label="Redis" ok={redisHealthy} />
-          <HealthPill label="Worker" ok={workerHealth?.status === 'ok'} meta={workerHealth ? `${workerHealth.running_jobs} active · ${workerHealth.queue_depth} queued` : 'unknown'} />
-          <button className={`primary-button compact refresh-button${refreshButtonActive ? ' refreshing' : ''}${manualRefreshFeedback ? ' feedback' : ''}`} type="button" onClick={() => void handleManualRefresh()} disabled={jobsLoading || jobsRefreshing} aria-busy={refreshButtonActive} aria-label={refreshButtonActive ? 'Refreshing jobs' : 'Refresh jobs'} title={refreshButtonActive ? 'Refreshing jobs' : 'Refresh jobs'}>
-            <span className="refresh-button__icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18.7 9A7 7 0 0 0 6.3 6.8L4 9" /><path d="M5.3 15A7 7 0 0 0 17.7 17.2L20 15" /></svg></span>
-            <span className="refresh-button__label">Refresh</span>
-          </button>
+          </div>
         </div>
       </header>
 
-      <main className="workspace">
-        {activePage === 'dashboard' ? (
-          <section className="page-stack" aria-labelledby="dashboard-title">
-            <div className="page-heading">
-              <h2 id="dashboard-title">Dashboard</h2>
-            </div>
-            {streamState === 'fallback' ? <div className="fallback-banner" role="status">Live stream disconnected; polling fallback is active.</div> : null}
-            
-            <div className="stats-strip">
-              <div className="stats-item">
-                <span className="stats-val">{summary.all}</span>
-                <span className="stats-label">Total</span>
+      <div className="notification-area">
+        {toast && (
+          <div className="toast">
+            {toast.type === 'success' && <CheckCircle2 size={16} className="text-emerald-400" />}
+            {toast.type === 'error' && <AlertTriangle size={16} className="text-rose-400" />}
+            {toast.type === 'info' && <Info size={16} className="text-blue-400" />}
+            <span className="text-zinc-200 font-medium">{toast.msg}</span>
+          </div>
+        )}
+      </div>
+
+      <main className="main-container">
+        {activePage === 'dashboard' && (
+          <>
+            <div className="page-header">
+              <div>
+                <h1 className="text-lg font-semibold tracking-tight text-zinc-50">Dashboard</h1>
+                <p className="text-xs text-zinc-400">Monitor conversion queue and system metrics.</p>
               </div>
-              <div className="stats-item">
-                <span className="stats-val orange">{summary.queued}</span>
-                <span className="stats-label">Queued</span>
-              </div>
-              <div className="stats-item">
-                <span className="stats-val blue">{summary.running}</span>
-                <span className="stats-label">Running</span>
-              </div>
-              <div className="stats-item">
-                <span className="stats-val green">{summary.completed}</span>
-                <span className="stats-label">Done</span>
-              </div>
-              <div className="stats-item">
-                <span className="stats-val red">{summary.failed}</span>
-                <span className="stats-label">Failed</span>
-              </div>
+              <button className="btn btn-primary" onClick={() => setActivePage('convert')}>
+                <Plus size={14} />
+                <span>New Job</span>
+              </button>
             </div>
 
-            <div className="dashboard-workspace-grid">
-              <section className="card queue-card">
-                <div className="queue-toolbar">
-                  <ViewTabs value={dashboardView} onChange={(v) => setDashboardView(v as DashboardView)} />
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className="metric-title">Total Jobs</span>
+                <div className="metric-value-row">
+                  <span className="text-2xl font-semibold font-mono tracking-tight text-zinc-100">{summary.all}</span>
+                  <span className="text-[10px] text-zinc-500">active / done</span>
                 </div>
-                <JobControls filters={filters} setFilters={setFilters} selectedCount={selectedJobIds.size} filteredJobs={filteredJobs} setSelectedJobIds={setSelectedJobIds} runBulkAction={runBulkAction} />
-                {dashboardView === 'outputs' ? <OutputsPanel outputs={outputs} onClear={() => setOutputs([])} /> : dashboardView === 'advanced' ? <AdvancedPanel streamState={streamState} workerHealth={workerHealth} roots={roots} /> : <JobList jobsLoading={jobsLoading} jobs={filteredJobs} selectedJobIds={selectedJobIds} setSelectedJobIds={setSelectedJobIds} setSelectedJobId={setSelectedJobId} refreshJobs={refreshJobs} cancelJob={(id) => cancelJob(id)} />}
-              </section>
-
-              <aside className="dashboard-sidebar">
-                <section className="card batches-card compact-batches-card">
-                  <CardHeader title="Recent batches" badge={`${batches.length} batches`} />
-                  <div className="batch-list">
-                    {batches.length ? batches.slice(0, 4).map((batch) => (
-                      <div className="batch-row" key={batch.batch_id}>
-                        <strong>{batch.batch_id.slice(0, 8)}</strong>
-                        <span>{batch.total} jobs · {batch.completed} done · {batch.failed} failed</span>
-                        <em>{batch.progress_percent}% batch progress</em>
-                      </div>
-                    )) : <EmptyState title="No batches yet" body="Create jobs in Convert." />}
-                  </div>
-                </section>
-
-                <OutputsPanel outputs={outputs} compact={true} onClear={() => setOutputs([])} />
-              </aside>
-            </div>
-          </section>
-        ) : null}
-
-        {activePage === 'convert' ? (
-          <section className="convert-layout" aria-labelledby="convert-title">
-            <div className="page-heading convert-heading">
-              <div><p className="eyebrow">Convert workflow</p><h2 id="convert-title">Select files and queue conversions</h2></div>
-              <button className="ghost-button" type="button" onClick={() => setActivePage('dashboard')}>Back to dashboard</button>
-            </div>
-            <section className="card browser-card">
-              <CardHeader title="Source browser" badge={selectedRoot?.label || 'No root'} />
-              <div className="source-tabs" role="tablist" aria-label="Source type">
-                <button className="source-tab disabled" type="button" role="tab" aria-selected="false" title="Browser upload is not enabled yet">Local files</button>
-                <button className="source-tab disabled" type="button" role="tab" aria-selected="false" title="Folder picker is not enabled yet">Local folder</button>
-                <button className="source-tab active" type="button" role="tab" aria-selected="true">Server browser</button>
               </div>
-              <div className="field-grid browser-controls">
-                <label>Media root<select value={selectedRootKey} onChange={(event) => setSelectedRootKey(event.target.value)}>{roots.length ? roots.map((root) => <option key={root.key} value={root.key}>{root.label}</option>) : <option value="">No roots</option>}</select></label>
-                <label>Search<div className="inline-control"><input value={browserQuery} onChange={(event) => setBrowserQuery(event.target.value)} placeholder="Filter names" /><button className="ghost-button" type="button" onClick={() => void openPath(currentPath, browserQuery)}>Find</button></div></label>
+              <div className="metric-card queued">
+                <span className="metric-title">Queued</span>
+                <div className="metric-value-row">
+                  <span className="text-2xl font-semibold font-mono tracking-tight text-amber-500">{summary.queued}</span>
+                  <span className="text-[10px] text-zinc-500">waiting</span>
+                </div>
               </div>
-              <div className="path-bar"><span title={`/${currentPath}`}>/{currentPath || ''}</span><button className="ghost-button tiny" type="button" onClick={() => void openPath('', '')}>Root</button></div>
-              <div className="browser-list dense" aria-live="polite">
-                {browserLoading ? <EmptyState title="Loading directory…" /> : entries.length ? entries.map((entry) => (
-                  <button className={`browser-row ${entry.type === 'file' && selectedPaths.has(entry.rel_path) ? 'selected' : ''}`} key={`${entry.type}:${entry.rel_path}`} type="button" onClick={() => {
-                    if (entry.type === 'dir') void openPath(entry.rel_path, '');
-                    else setSelectedPaths((paths) => {
-                      const next = new Set(paths);
-                      if (next.has(entry.rel_path)) next.delete(entry.rel_path);
-                      else next.add(entry.rel_path);
+              <div className="metric-card running">
+                <span className="metric-title">Running</span>
+                <div className="metric-value-row">
+                  <span className="text-2xl font-semibold font-mono tracking-tight text-blue-500">{summary.running}</span>
+                  <span className="text-[10px] text-zinc-500">processing</span>
+                </div>
+              </div>
+              <div className="metric-card done">
+                <span className="metric-title">Completed</span>
+                <div className="metric-value-row">
+                  <span className="text-2xl font-semibold font-mono tracking-tight text-emerald-500">{summary.completed}</span>
+                  <span className="text-[10px] text-zinc-500">success</span>
+                </div>
+              </div>
+              <div className="metric-card failed">
+                <span className="metric-title">Failed</span>
+                <div className="metric-value-row">
+                  <span className="text-2xl font-semibold font-mono tracking-tight text-rose-500">{summary.failed}</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">errors</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="dashboard-grid">
+              <div className="dashboard-main">
+                <div className="panel">
+                  <JobControls 
+                    filters={filters} 
+                    setFilters={setFilters} 
+                    selectedCount={selectedJobIds.size} 
+                    filteredJobs={filteredJobs} 
+                    setSelectedJobIds={setSelectedJobIds} 
+                    runBulkAction={runBulkAction} 
+                  />
+                  <JobList 
+                    jobsLoading={jobsLoading} 
+                    jobs={filteredJobs} 
+                    selectedJobIds={selectedJobIds} 
+                    setSelectedJobIds={setSelectedJobIds} 
+                    setSelectedJobId={setSelectedJobId} 
+                    refreshJobs={refreshJobs} 
+                    cancelJob={cancelJob} 
+                    deleteJob={(id) => bulkDelete([id])}
+                  />
+                </div>
+              </div>
+
+              <div className="dashboard-sidebar">
+                <OutputsPanel outputs={outputs} />
+                <SystemResourcesPanel workerHealth={workerHealth} />
+              </div>
+            </div>
+          </>
+        )}
+
+        {activePage === 'convert' && (
+          <div className="form-container">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight text-zinc-50">New Conversion</h1>
+              <p className="text-xs text-zinc-400 mt-0.5">Select media files, choose encoding profile, and queue jobs.</p>
+            </div>
+
+            <div className="form-panel">
+              <span className="form-section-title border-b pb-2">1. Source Browser</span>
+              
+              <div className="flex gap-2">
+                <select className="form-input" style={{ width: '200px' }} value={selectedRootKey} onChange={e => setSelectedRootKey(e.target.value)}>
+                  {roots.length ? roots.map(r => <option key={r.key} value={r.key}>{r.label}</option>) : <option value="">No roots</option>}
+                </select>
+                <div className="input-wrapper" style={{ flexGrow: 1 }}>
+                  <input type="text" className="form-input has-icon" placeholder="Search files..." value={browserQuery} onChange={e => setBrowserQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && openPath(currentPath, browserQuery)} />
+                  <Search size={14} className="input-icon" />
+                </div>
+                <button className="btn btn-outline" onClick={() => openPath(currentPath, browserQuery)}>Find</button>
+              </div>
+              
+              <div className="bg-zinc-950 border border-zinc-800 rounded p-2 text-xs text-zinc-400 font-mono flex justify-between items-center">
+                <span>/{currentPath}</span>
+                <button className="text-zinc-500 hover:text-zinc-300" style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '0.125rem 0.5rem' }} onClick={() => openPath('', '')}>Root</button>
+              </div>
+              
+              <div className="border border-zinc-800 rounded bg-zinc-950 max-h-64 overflow-y-auto">
+                {browserLoading ? <div className="p-4 text-center text-zinc-500">Loading...</div> : entries.length ? entries.map(entry => (
+                  <div key={entry.rel_path} className={`flex items-center gap-3 p-2 hover:bg-zinc-900 border-b border-zinc-800 cursor-pointer ${selectedPaths.has(entry.rel_path) ? 'bg-zinc-900' : ''}`} onClick={() => {
+                    if (entry.type === 'dir') openPath(entry.rel_path, '');
+                    else setSelectedPaths(prev => {
+                      const next = new Set(prev);
+                      if (next.has(entry.rel_path)) next.delete(entry.rel_path); else next.add(entry.rel_path);
                       return next;
                     });
                   }}>
-                    <span className="row-icon">{entry.type === 'dir' ? '⌁' : '◼'}</span><span><strong>{entry.name}</strong><small>{entry.type === 'dir' ? 'Folder' : 'Server video'}</small></span>
-                  </button>
-                )) : <EmptyState title="No supported videos here" body="Only configured roots and supported video extensions are shown." />}
+                    {entry.type === 'dir' ? <Folder size={16} className="text-blue-400" /> : <FileVideo size={16} className="text-zinc-500" />}
+                    <div className="flex-grow">
+                      <div className="text-xs text-zinc-200">{entry.name}</div>
+                    </div>
+                    {entry.type === 'file' && <input type="checkbox" className="form-checkbox" checked={selectedPaths.has(entry.rel_path)} readOnly />}
+                  </div>
+                )) : <div className="p-4 text-center text-zinc-500">No media found.</div>}
               </div>
-              <button className="primary-button full" type="button" onClick={() => void addSelectedToStage()}>Add selected videos ({selectedEntries.length})</button>
-            </section>
-            <section className="card staging-card">
-              <CardHeader title="Staging" badge={`${staged.length} files · ${selectedStageCount} selected`} />
-              <div className="staging-actions"><button className="ghost-button" type="button" onClick={() => setStaged((items) => items.map((item) => ({ ...item, selected: true })))}>Select all</button><button className="ghost-button" type="button" onClick={() => setStaged((items) => items.map((item) => ({ ...item, selected: false })))}>Select none</button><button className="danger-button" type="button" onClick={() => setStaged((items) => items.filter((item) => !item.selected))}>Remove selected</button></div>
-              <div className="stage-list compact-list">
-                {staged.length ? staged.map((item) => <label className="stage-row" key={item.id}><input type="checkbox" checked={item.selected} onChange={(event) => setStaged((items) => items.map((stage) => stage.id === item.id ? { ...stage, selected: event.target.checked } : stage))} /><span><strong>{item.name}</strong><small>{item.rootLabel} · {fileName(item.sourcePath)}</small></span><span className="micro-badge">{item.subtitleProbeStatus === 'loading' ? 'subs…' : `${item.subtitleTrackCount ?? 0} subs`}</span></label>) : <EmptyState title="Staging is empty" body="Select server videos and add them here before queueing." />}
-              </div>
-            </section>
-            <section className="card settings-card">
-              <CardHeader title="Export settings" badge={deriveProfile(settings.video_export)} />
-              <label className="preset-picker">Apply preset<select value={selectedPresetId} onChange={(event) => applyPreset(event.target.value)}><option value="">Custom settings</option>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label>
-              {exportSettingsForm}
-              <div className="submit-actions"><button className="ghost-button" type="button" onClick={() => void validateStaging()} disabled={submitting || !selectedStageCount}>Validate selected</button><button className="primary-button glow" type="button" onClick={() => void submitBatch()} disabled={submitting || !selectedStageCount}>{submitting ? 'Creating jobs…' : `Create ${selectedStageCount} job${selectedStageCount === 1 ? '' : 's'}`}</button></div>
-              {submitSummary ? <p className="submit-summary" role="status">{submitSummary}</p> : null}
-            </section>
-          </section>
-        ) : null}
 
-        {activePage === 'presets' ? (
-          <section className="presets-layout" aria-labelledby="presets-title">
-            <div className="page-heading"><div><p className="eyebrow">Reusable conversion setup</p><h2 id="presets-title">Local presets</h2></div><span className="soft-badge">Stored in this browser</span></div>
-            <section className="card preset-editor">
-              <CardHeader title={editingPresetId ? 'Edit preset' : 'Create preset'} badge={deriveProfile(settings.video_export)} />
-              <div className="field-grid preset-form"><label>Name<input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder="Fast MP4, Archive MKV…" /></label><label>Description<input value={presetDescription} onChange={(event) => setPresetDescription(event.target.value)} placeholder="Optional note" /></label></div>
-              {exportSettingsForm}
-              <div className="submit-actions"><button className="primary-button" type="button" onClick={savePreset}>{editingPresetId ? 'Update preset' : 'Save preset'}</button><button className="ghost-button" type="button" onClick={resetPresetForm}>Clear form</button></div>
-            </section>
-            <section className="card presets-card">
-              <CardHeader title="Saved presets" badge={`${presets.length} presets`} />
-              <div className="preset-grid">
-                {presets.length ? presets.map((preset) => <article className="preset-tile" key={preset.id}><div><strong>{preset.name}</strong><small>{preset.description || 'No description'}</small></div><div className="preset-meta"><span>{preset.settings.video_export}/{preset.settings.audio_export}/{preset.settings.subtitle_export}</span><span>{formatDate(preset.updatedAt)}</span></div><div className="preset-actions"><button className="primary-button tiny" type="button" onClick={() => applyPreset(preset.id)}>Apply</button><button className="ghost-button tiny" type="button" onClick={() => startEditPreset(preset)}>Edit</button><button className="danger-button tiny" type="button" onClick={() => deletePreset(preset.id)}>Delete</button></div></article>) : <EmptyState title="No presets saved" body="Create reusable settings here, then apply them from the Convert tab." />}
+              <div className="flex justify-end mt-2">
+                <button className="btn btn-primary" onClick={() => {
+                  const nextItems = selectedEntries.map(e => ({ id: `${selectedRootKey}:${e.rel_path}`, rootKey: selectedRootKey, rootLabel: selectedRoot?.label || '', sourcePath: e.rel_path, name: e.name, selected: true, subtitleProbeStatus: 'idle' as const }));
+                  setStaged(prev => {
+                    const existingIds = new Set(prev.map(i => i.id));
+                    return [...prev, ...nextItems.filter(i => !existingIds.has(i.id))];
+                  });
+                  setSelectedPaths(new Set());
+                  showToast('Added to staging.', 'success');
+                }} disabled={selectedPaths.size === 0}>
+                  Add Selected to Stage
+                </button>
               </div>
-            </section>
-          </section>
-        ) : null}
 
-        {activePage === 'settings' ? (
-          <section className="settings-layout" aria-labelledby="settings-title">
-            <div className="page-heading">
-              <div>
-                <p className="eyebrow">User Management</p>
-                <h2 id="settings-title">Security & Credentials</h2>
+              {staged.length > 0 && (
+                <>
+                  <span className="form-section-title border-b pb-2 mt-4">2. Staged Files ({staged.length})</span>
+                  <div className="border border-zinc-800 rounded bg-zinc-950 max-h-40 overflow-y-auto">
+                    {staged.map(item => (
+                      <div key={item.id} className="flex items-center gap-3 p-2 border-b border-zinc-800">
+                        <input type="checkbox" className="form-checkbox" checked={item.selected} onChange={e => setStaged(s => s.map(x => x.id === item.id ? { ...x, selected: e.target.checked } : x))} />
+                        <div className="text-xs text-zinc-200 truncate flex-grow">{item.name}</div>
+                        <button className="text-rose-400 hover:text-rose-500" onClick={() => setStaged(s => s.filter(x => x.id !== item.id))}><Trash2 size={14} /></button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <span className="form-section-title border-b pb-2 mt-4">3. Export Options</span>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">Video Format</label>
+                  <select className="form-input" value={settings.video_export} onChange={e => setSettings(s => ({...s, video_export: e.target.value as any}))}>
+                    <option value="mp4">MP4 (H.264)</option>
+                    <option value="mkv">MKV (H.265)</option>
+                    <option value="webm">WebM (VP9)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Audio</label>
+                  <select className="form-input" value={settings.audio_export} onChange={e => setSettings(s => ({...s, audio_export: e.target.value as any}))}>
+                    <option value="copy">Copy Original</option>
+                    <option value="aac">AAC</option>
+                    <option value="mp3">MP3</option>
+                    <option value="opus">Opus</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Subtitles</label>
+                  <select className="form-input" value={settings.subtitle_export} onChange={e => setSettings(s => ({...s, subtitle_export: e.target.value as any}))}>
+                    <option value="none">None</option>
+                    <option value="embedded">Embedded</option>
+                    <option value="separate_srt">Separate SRT</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Language Preference</label>
+                  <select className="form-input" value={settings.subtitle_language} onChange={e => setSettings(s => ({...s, subtitle_language: e.target.value}))}>
+                    <option value="">Auto Detect</option>
+                    {subtitleLanguages.map(lang => <option key={lang} value={lang}>{lang}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="border-t border-zinc-800 pt-4 flex items-center justify-end gap-2">
+                <button className="btn btn-outline" onClick={() => setActivePage('dashboard')}>Cancel</button>
+                <button className="btn btn-primary" onClick={submitBatch} disabled={submitting || staged.filter(s => s.selected).length === 0}>
+                  <Play size={14} />
+                  <span>Queue {staged.filter(s => s.selected).length} Jobs</span>
+                </button>
               </div>
             </div>
-            <SettingsPanel />
-          </section>
-        ) : null}
+          </div>
+        )}
+
+        {activePage === 'presets' && (
+          <div className="form-container">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight text-zinc-50">Presets</h1>
+              <p className="text-xs text-zinc-400 mt-0.5">Manage your saved conversion profiles.</p>
+            </div>
+            
+            <div className="form-panel mb-6">
+              <span className="form-section-title border-b pb-2">{editingPresetId ? 'Edit Preset' : 'Create Preset'}</span>
+              <div className="form-grid mt-4">
+                <div className="form-group">
+                  <label className="form-label">Name</label>
+                  <input className="form-input" value={presetName} onChange={e => setPresetName(e.target.value)} placeholder="Fast MP4, Archive MKV..." />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Description</label>
+                  <input className="form-input" value={presetDescription} onChange={e => setPresetDescription(e.target.value)} placeholder="Optional note" />
+                </div>
+              </div>
+              
+              <span className="form-section-title border-b pb-2 mt-4">Export Options</span>
+              <div className="form-grid mt-4">
+                <div className="form-group">
+                  <label className="form-label">Video Format</label>
+                  <select className="form-input" value={settings.video_export} onChange={e => setSettings(s => ({ ...s, video_export: e.target.value as any }))}>
+                    <option value="mp4">MP4 (H.264)</option>
+                    <option value="mkv">MKV (H.265)</option>
+                    <option value="webm">WebM (VP9)</option>
+                    <option value="copy">Copy Original</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Audio</label>
+                  <select className="form-input" value={settings.audio_export} onChange={e => setSettings(s => ({ ...s, audio_export: e.target.value as any }))}>
+                    <option value="aac">AAC (Standard)</option>
+                    <option value="mp3">MP3</option>
+                    <option value="opus">Opus</option>
+                    <option value="copy">Copy Original</option>
+                    <option value="remove">Remove Audio</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Subtitles</label>
+                  <select className="form-input" value={settings.subtitle_export} onChange={e => setSettings(s => ({ ...s, subtitle_export: e.target.value as any }))}>
+                    <option value="none">None</option>
+                    <option value="embed">Embed (Soft)</option>
+                    <option value="burn">Burn In (Hard)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Language Preference</label>
+                  <select className="form-input" value={settings.subtitle_language} onChange={e => setSettings(s => ({ ...s, subtitle_language: e.target.value }))}>
+                    <option value="auto">Auto Detect</option>
+                    <option value="eng">English</option>
+                    <option value="tur">Turkish</option>
+                    <option value="ger">German</option>
+                    <option value="spa">Spanish</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div className="pt-4 flex gap-2 justify-end">
+                <button className="btn btn-outline" onClick={resetPresetForm}>Clear Form</button>
+                <button className="btn btn-primary" onClick={() => { savePreset(); showToast(editingPresetId ? 'Preset updated' : 'Preset saved', 'success'); }} disabled={!presetName.trim()}>
+                  {editingPresetId ? 'Update Preset' : 'Save Preset'}
+                </button>
+              </div>
+            </div>
+
+            <div className="presets-grid">
+              {presets.length ? presets.map(preset => (
+                <div className="preset-card" key={preset.id}>
+                  <div className="preset-header">
+                    <span className="preset-badge">FFmpeg</span>
+                    <span className="preset-type">Custom</span>
+                  </div>
+                  <div className="preset-body">
+                    <h4>{preset.name}</h4>
+                    <p>{preset.description || 'No description'}</p>
+                    <div className="text-xs text-zinc-500 mt-2 font-mono">
+                      {preset.settings.video_export}/{preset.settings.audio_export}
+                    </div>
+                  </div>
+                  <div className="mt-auto pt-4 flex gap-2 border-t border-zinc-800">
+                    <button className="btn btn-primary flex-grow justify-center" onClick={() => {
+                      setSettings(preset.settings);
+                      setActivePage('convert');
+                      showToast(`Loaded preset ${preset.name}`, 'info');
+                    }}>Apply</button>
+                    <button className="btn btn-outline" onClick={() => startEditPreset(preset)}>Edit</button>
+                    <button className="btn btn-outline text-rose-400 hover:text-rose-500" onClick={() => deletePreset(preset.id)}><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              )) : null}
+
+              <div className="preset-card preset-new cursor-pointer hover:bg-zinc-800/50" onClick={resetPresetForm}>
+                <Sliders size={24} className="text-zinc-500 mb-2" />
+                <div className="text-sm font-medium text-zinc-300">New Preset</div>
+                <div className="text-xs text-zinc-500 mt-1">Clear form to create a new preset.</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activePage === 'settings' && (
+          <div className="form-container">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight text-zinc-50">System Settings</h1>
+              <p className="text-xs text-zinc-400 mt-0.5">Configuration and limits.</p>
+            </div>
+            <div className="form-panel">
+              <SettingsPanel />
+            </div>
+          </div>
+        )}
       </main>
 
-      {selectedJob ? <aside className="detail-drawer" role="dialog" aria-modal="false" aria-label={`Job detail for ${selectedJob.input_filename || selectedJob.id}`}>
-        <div className="drawer-header"><div><p className="eyebrow">Job detail</p><h2>{selectedJob.input_filename || selectedJob.id}</h2></div><button className="ghost-button tiny" type="button" onClick={() => setSelectedJobId(null)} aria-label="Close job detail">Close</button></div>
-        <dl className="detail-grid"><div><dt>Status</dt><dd><StatusBadge status={selectedJob.status} /></dd></div><div><dt>Source path</dt><dd>{selectedJob.source_path || selectedJob.input_filename || 'Legacy input'}</dd></div><div><dt>Batch</dt><dd>{selectedJob.batch_id || '—'}</dd></div><div><dt>Telemetry</dt><dd>{formatEta(selectedJob.progress_eta_seconds)} · {selectedJob.progress_fps ?? '—'} fps · {selectedJob.progress_bitrate || 'bitrate —'} · {selectedJob.progress_speed || 'speed —'}</dd></div></dl>
-        <h3>Timeline</h3><ol className="timeline-list">{selectedJob.timeline?.length ? selectedJob.timeline.map((item, index) => <li key={`${item.at}-${index}`}><strong>{item.phase || item.status}</strong><span>{formatDate(item.at)} · {item.message || ''}</span></li>) : <li>No timeline events yet.</li>}</ol>
-        <h3>Log tail</h3><pre className="log-tail">{selectedJob.log_tail?.length ? selectedJob.log_tail.join('\n') : 'No log lines yet.'}</pre>
-      </aside> : null}
-
-      <div className="sr-only" aria-live="polite">{announcement}</div>
-      <footer className="footer"><span>Last sync: {jobsRefreshing ? 'updating…' : formatDate(lastSync)}</span><span>Live updates: {streamState === 'live' ? 'SSE connected' : `polling every ${pollMs / 1000}s`}</span><span>Contract: existing /api/v1 endpoints preserved</span></footer>
-      {toast ? <div className="toast" role="status">{toast}</div> : null}
-    </div>
+      <footer className="app-footer">
+        <div className="footer-container">
+          <div className="footer-left">
+            <span>Last Sync: {lastSync ? formatDate(lastSync) : 'Never'}</span>
+            <span className="hidden sm:inline">|</span>
+            <span className="flex items-center gap-1">
+              <span className={`status-dot ${streamState === 'live' ? 'ok' : 'error'}`}></span>
+              <span>{streamState === 'live' ? 'Live Stream Active' : 'Polling'}</span>
+            </span>
+          </div>
+          <div>
+            <span>/api/v1/ endpoints are preserved</span>
+          </div>
+        </div>
+      </footer>
+    </>
   );
 }
 

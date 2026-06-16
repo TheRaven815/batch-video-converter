@@ -36,75 +36,69 @@ export function SettingsPanel() {
   };
 
   return (
-    <div className="settings-container" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6) 0' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '480px' }}>
-        <div className="card-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.3rem', marginBottom: 'var(--space-4)' }}>
-          <h3 className="card-title">Security Settings</h3>
-          <p className="card-subtitle" style={{ margin: 0, color: 'var(--muted)', fontSize: '0.82rem' }}>Update your username and password.</p>
+    <div>
+      <div className="border-b border-zinc-800 pb-2 mb-4" style={{ marginBottom: '1rem', paddingBottom: '0.5rem' }}>
+        <h3 className="text-sm font-semibold text-zinc-100" style={{ margin: 0 }}>Security Settings</h3>
+        <p className="text-xs text-zinc-400 mt-0.5" style={{ margin: '0.125rem 0 0 0' }}>Update your username and password.</p>
+      </div>
+
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }} autoComplete="off">
+        <div className="form-group" style={{ maxWidth: '24rem' }}>
+          <label className="form-label">Current Password</label>
+          <input
+            type="password"
+            className="form-input"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="Your current password"
+            disabled={loading}
+            autoComplete="current-password"
+            name="current-password"
+          />
         </div>
 
-        <form onSubmit={handleSubmit} style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }} autoComplete="off">
-          <div className="field-grid">
-            <label>
-              Current Password
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Your current password"
-                disabled={loading}
-                autoComplete="current-password"
-                name="current-password"
-              />
-            </label>
+        <div className="form-grid" style={{ maxWidth: '32rem' }}>
+          <div className="form-group">
+            <label className="form-label">New Username</label>
+            <input
+              type="text"
+              className="form-input"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              placeholder="Leave blank to keep current"
+              disabled={loading}
+              autoComplete="off"
+              name="new-username"
+              data-lpignore="true"
+            />
           </div>
-
-          <div className="field-grid">
-            <label>
-              New Username
-              <input
-                type="text"
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                placeholder="Leave blank to keep current"
-                disabled={loading}
-                autoComplete="off"
-                name="new-username"
-                data-lpignore="true"
-              />
-            </label>
-            <label>
-              New Password
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Leave blank to keep current"
-                disabled={loading}
-                autoComplete="new-password"
-                name="new-password"
-              />
-            </label>
+          <div className="form-group">
+            <label className="form-label">New Password</label>
+            <input
+              type="password"
+              className="form-input"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Leave blank to keep current"
+              disabled={loading}
+              autoComplete="new-password"
+              name="new-password"
+            />
           </div>
+        </div>
 
-          {status && (
-            <div className={`login-error`} style={{
-              background: status.type === 'success' ? 'rgba(72, 255, 122, 0.1)' : undefined,
-              borderColor: status.type === 'success' ? 'rgba(72, 255, 122, 0.25)' : undefined,
-              color: status.type === 'success' ? 'var(--green)' : undefined,
-              margin: '0',
-            }}>
-              {status.msg}
-            </div>
-          )}
-
-          <div className="submit-actions" style={{ marginTop: 'var(--space-2)' }}>
-            <button type="submit" className="primary-button full" disabled={loading}>
-              {loading ? 'Updating...' : 'Update'}
-            </button>
+        {status && (
+          <div className={`text-xs p-2 border rounded ${status.type === 'success' ? 'text-emerald-400 border-emerald-900 bg-emerald-950/30' : 'text-rose-400 border-rose-900 bg-rose-950/30'}`} style={{ maxWidth: '32rem' }}>
+            {status.msg}
           </div>
-        </form>
-      </div>
+        )}
+
+        <div className="pt-2" style={{ paddingTop: '0.5rem' }}>
+          <button type="submit" className="btn btn-primary" disabled={loading}>
+            {loading ? 'Updating...' : 'Update Credentials'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
