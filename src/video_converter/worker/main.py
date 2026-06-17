@@ -248,8 +248,11 @@ def _probe_subtitle_languages(input_path: Path) -> set[str]:
         "json",
         str(input_path),
     ]
-    proc = subprocess.run(probe_cmd, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
+    try:
+        proc = subprocess.run(probe_cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            return set()
+    except FileNotFoundError:
         return set()
 
     try:
@@ -331,8 +334,11 @@ def _probe_duration_seconds(input_path: Path) -> float | None:
         "json",
         str(input_path),
     ]
-    proc = subprocess.run(probe_cmd, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
+    try:
+        proc = subprocess.run(probe_cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            return None
+    except FileNotFoundError:
         return None
 
     try:
@@ -404,15 +410,30 @@ def _run_ffmpeg_with_progress(
     duration_seconds: float | None,
 ) -> tuple[int, str]:
     progress_cmd = [*cmd[:-1], "-progress", "pipe:1", "-nostats", cmd[-1]]
-    proc = subprocess.Popen(
-        progress_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    )
+    try:
+        proc = subprocess.Popen(
+            progress_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        return 127, "ffmpeg executable not found. Please ensure FFmpeg is installed and in your PATH."
+
+    stderr_lines: list[str] = []
+
+    def _read_stderr() -> None:
+        if proc.stderr:
+            for raw_line in proc.stderr:
+                stderr_lines.append(raw_line)
+                if len(stderr_lines) > 50:
+                    stderr_lines.pop(0)
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
 
     # Track the process so the shutdown manager can terminate it
     _shutdown.register_proc(job_id, proc)
@@ -492,10 +513,13 @@ def _run_ffmpeg_with_progress(
                 snapshot.clear()
 
         try:
-            _, stderr_text = proc.communicate(timeout=10)
+            proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
-            _, stderr_text = proc.communicate()
+            proc.wait()
+
+        stderr_thread.join(timeout=2)
+        stderr_text = "".join(stderr_lines)
 
         if cancelled_flag["value"] or _is_cancel_requested(job_id):
             return 130, (stderr_text or "cancelled")
@@ -653,15 +677,18 @@ def process_job(job_id: str) -> None:
                     f"0:s:m:language:{subtitle_language}?" if subtitle_language else "0:s:0?",
                     str(subtitle_output),
                 ]
-                subtitle_proc = subprocess.run(
-                    subtitle_cmd, capture_output=True, text=True, check=False
-                )
-                if subtitle_proc.returncode != 0:
-                    subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
-                    job_logger.warning(
-                        "separate_srt export skipped: %s",
-                        subtitle_stderr or "subtitle stream not found",
+                try:
+                    subtitle_proc = subprocess.run(
+                        subtitle_cmd, capture_output=True, text=True, check=False
                     )
+                    if subtitle_proc.returncode != 0:
+                        subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
+                        job_logger.warning(
+                            "separate_srt export skipped: %s",
+                            subtitle_stderr or "subtitle stream not found",
+                        )
+                except FileNotFoundError:
+                    job_logger.warning("separate_srt export skipped: ffmpeg executable not found")
 
             job_repository.update_status(
                 job_id,
