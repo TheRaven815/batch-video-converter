@@ -10,6 +10,7 @@ from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NA
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
 DEFAULT_STALE_RUNNING_SECONDS = 60 * 60
+RUNNING_JOBS_INDEX_KEY = "jobs:status:running"
 
 
 def _append_limited(values: list[Any], item: Any, limit: int) -> list[Any]:
@@ -41,7 +42,13 @@ class JobRepository:
         return self.parse_record(str(raw))
 
     def persist(self, record: JobRecord) -> None:
-        self.redis.set(f"{JOB_KEY_PREFIX}{record.id}", record.model_dump_json())
+        previous = self.get(record.id)
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.set(f"{JOB_KEY_PREFIX}{record.id}", record.model_dump_json())
+        self._sync_running_index(
+            pipe, record.id, previous.status if previous else None, record.status
+        )
+        pipe.execute()
 
     def enqueue(self, record: JobRecord) -> None:
         self.enqueue_many([record])
@@ -56,17 +63,50 @@ class JobRepository:
             pipe.set(f"{JOB_KEY_PREFIX}{record.id}", record.model_dump_json())
             pipe.rpush(JOBS_INDEX_KEY, record.id)
             pipe.rpush(QUEUE_NAME, record.id)
+            if record.status == JobStatus.running:
+                pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, record.id)
+                pipe.rpush(RUNNING_JOBS_INDEX_KEY, record.id)
         pipe.execute()
 
     def list_ids(self) -> list[str]:
         return list(self.redis.lrange(JOBS_INDEX_KEY, 0, -1))
 
+    def list_records_page(
+        self, *, cursor: int = 0, limit: int = 100, newest_first: bool = True
+    ) -> tuple[list[JobRecord], int | None]:
+        if limit <= 0:
+            return [], None
+
+        total = int(self.redis.llen(JOBS_INDEX_KEY) or 0)
+        if cursor >= total:
+            return [], None
+
+        if newest_first:
+            end = total - cursor - 1
+            start = max(0, end - limit + 1)
+            ids = list(reversed(self.redis.lrange(JOBS_INDEX_KEY, start, end)))
+        else:
+            start = cursor
+            end = min(total - 1, cursor + limit - 1)
+            ids = list(self.redis.lrange(JOBS_INDEX_KEY, start, end))
+
+        records = [record for job_id in ids if (record := self.get(job_id)) is not None]
+        next_cursor = cursor + len(ids) if cursor + len(ids) < total else None
+        return records, next_cursor
+
+    def count_running_jobs(self) -> int:
+        return int(self.redis.llen(RUNNING_JOBS_INDEX_KEY) or 0)
+
     def remove_from_queue(self, job_id: str) -> int:
         return int(self.redis.lrem(QUEUE_NAME, 0, job_id) or 0)
 
     def requeue_existing(self, record: JobRecord) -> None:
+        previous = self.get(record.id)
         pipe = self.redis.pipeline(transaction=True)
         pipe.set(f"{JOB_KEY_PREFIX}{record.id}", record.model_dump_json())
+        self._sync_running_index(
+            pipe, record.id, previous.status if previous else None, record.status
+        )
         pipe.rpush(QUEUE_NAME, record.id)
         pipe.execute()
 
@@ -74,6 +114,7 @@ class JobRepository:
         pipe = self.redis.pipeline(transaction=True)
         pipe.lrem(QUEUE_NAME, 0, job_id)
         pipe.lrem(JOBS_INDEX_KEY, 0, job_id)
+        pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, job_id)
         pipe.delete(f"{JOB_KEY_PREFIX}{job_id}")
         pipe.execute()
 
@@ -152,8 +193,22 @@ class JobRepository:
         if output_filename:
             record.output_filename = output_filename
 
-        self.persist(record)
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.set(f"{JOB_KEY_PREFIX}{record.id}", record.model_dump_json())
+        self._sync_running_index(pipe, record.id, previous_status, status)
+        pipe.execute()
         return record
+
+    def _sync_running_index(
+        self, pipe: Any, job_id: str, previous_status: JobStatus | None, new_status: JobStatus
+    ) -> None:
+        if previous_status == new_status:
+            return
+        if previous_status == JobStatus.running:
+            pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, job_id)
+        if new_status == JobStatus.running:
+            pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, job_id)
+            pipe.rpush(RUNNING_JOBS_INDEX_KEY, job_id)
 
     def recover_stale_running_jobs(
         self, *, stale_after_seconds: int = DEFAULT_STALE_RUNNING_SECONDS

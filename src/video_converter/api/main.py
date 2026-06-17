@@ -49,8 +49,8 @@ from video_converter.core.models import (
     OutputFileDto,
     OutputListResponse,
     StructuredErrorResponse,
-    WorkerHealthResponse,
     SystemSettings,
+    WorkerHealthResponse,
     now_iso,
 )
 from video_converter.core.path_validation import validate_source_path
@@ -88,6 +88,7 @@ app.include_router(auth_router, prefix="/api/v1")
 
 _ERROR_CODE_BY_STATUS = {
     400: "bad_request",
+    401: "authentication_failed",
     404: "not_found",
     422: "validation_error",
     500: "internal_error",
@@ -119,7 +120,11 @@ async def structured_http_exception_handler(request: Request, exc: HTTPException
             details={"path": request.url.path},
         )
     )
-    return JSONResponse(status_code=exc.status_code, content=envelope.model_dump())
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=envelope.model_dump(),
+        headers=exc.headers,
+    )
 
 
 @app.get("/health/live", response_model=HealthResponse)
@@ -488,33 +493,37 @@ def list_jobs(
     created_after: str | None = None,
     created_before: str | None = None,
 ) -> list[JobRecord]:
-    ids = list(reversed(job_repository.list_ids()))
     jobs: list[JobRecord] = []
     next_cursor: int | None = None
+    scan_cursor: int | None = cursor
     statuses = _parse_status_filter(status)
     created_after_dt = _parse_datetime_filter(created_after, "created_after")
     created_before_dt = _parse_datetime_filter(created_before, "created_before")
 
-    for idx, job_id in enumerate(ids[cursor:], start=cursor):
-        record = _get_job_record(job_id)
-        if not record:
-            continue
-        if not _matches_job_filters(
-            record,
-            statuses=statuses,
-            q=q,
-            profile=profile,
-            source_root_key=source_root_key,
-            source_type=source_type,
-            include_archived=include_archived,
-            created_after=created_after_dt,
-            created_before=created_before_dt,
-        ):
-            continue
-        if len(jobs) >= limit:
-            next_cursor = idx
+    while scan_cursor is not None and len(jobs) < limit:
+        records, page_next_cursor = job_repository.list_records_page(
+            cursor=scan_cursor, limit=limit, newest_first=True
+        )
+        if not records:
             break
-        jobs.append(record)
+        for record in records:
+            if not _matches_job_filters(
+                record,
+                statuses=statuses,
+                q=q,
+                profile=profile,
+                source_root_key=source_root_key,
+                source_type=source_type,
+                include_archived=include_archived,
+                created_after=created_after_dt,
+                created_before=created_before_dt,
+            ):
+                continue
+            jobs.append(record)
+            if len(jobs) >= limit:
+                next_cursor = page_next_cursor
+                break
+        scan_cursor = page_next_cursor
 
     if response is not None and next_cursor is not None:
         response.headers["X-Next-Cursor"] = str(next_cursor)
@@ -550,11 +559,16 @@ def list_batches(
     cursor: Annotated[int, Query(ge=0)] = 0,
 ) -> BatchListResponse:
     grouped: dict[str, list[JobRecord]] = {}
-    for job_id in reversed(job_repository.list_ids()):
-        record = _get_job_record(job_id)
-        if not record or not record.batch_id or record.archived:
-            continue
-        grouped.setdefault(record.batch_id, []).append(record)
+    scan_cursor: int | None = 0
+    wanted_batches = cursor + limit + 1
+    while scan_cursor is not None and len(grouped) < wanted_batches:
+        records, scan_cursor = job_repository.list_records_page(
+            cursor=scan_cursor, limit=max(limit, 100), newest_first=True
+        )
+        for record in records:
+            if not record.batch_id or record.archived:
+                continue
+            grouped.setdefault(record.batch_id, []).append(record)
 
     batches = [
         _batch_summary_from_records(batch_id, records) for batch_id, records in grouped.items()
@@ -576,8 +590,10 @@ def stream_jobs() -> StreamingResponse:
         while True:
             records = [
                 record
-                for job_id in reversed(job_repository.list_ids())
-                if (record := _get_job_record(job_id)) and not record.archived
+                for record in job_repository.list_records_page(
+                    cursor=0, limit=100, newest_first=True
+                )[0]
+                if not record.archived
             ]
             snapshot = json.dumps(
                 [record.model_dump(mode="json") for record in records], sort_keys=True
@@ -617,11 +633,7 @@ def worker_health() -> WorkerHealthResponse:
         redis_status = "error"
         queue_depth = 0
 
-    running_jobs = 0
-    for job_id in job_repository.list_ids():
-        record = _get_job_record(job_id)
-        if record and record.status == JobStatus.running:
-            running_jobs += 1
+    running_jobs = job_repository.count_running_jobs()
 
     return WorkerHealthResponse(
         status="ok" if redis_status == "ok" else "error",
@@ -707,21 +719,40 @@ def clear_outputs() -> dict[str, int]:
     return {"deleted": count}
 
 
-@app.get("/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)])
-def get_system_settings() -> SystemSettings:
-    raw = storage_client.get("system:settings")
-    if raw:
-        try:
-            return SystemSettings.model_validate_json(raw)
-        except Exception:
-            pass
+def _default_system_settings() -> SystemSettings:
     return SystemSettings(worker_concurrency=settings.worker_concurrency)
 
 
-@app.post("/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)])
+def _load_system_settings() -> SystemSettings:
+    raw = storage_client.get("system:settings")
+    defaults = _default_system_settings()
+    if raw:
+        try:
+            stored = SystemSettings.model_validate_json(raw)
+            return SystemSettings.model_validate(
+                defaults.model_dump() | stored.model_dump(exclude_unset=True)
+            )
+        except Exception:
+            logger.warning("stored system settings are invalid; using defaults")
+    return defaults
+
+
+@app.get(
+    "/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)]
+)
+def get_system_settings() -> SystemSettings:
+    return _load_system_settings()
+
+
+@app.post(
+    "/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)]
+)
 def update_system_settings(payload: SystemSettings) -> SystemSettings:
-    storage_client.set("system:settings", payload.model_dump_json())
-    return payload
+    merged = SystemSettings.model_validate(
+        _default_system_settings().model_dump() | payload.model_dump(exclude_unset=True)
+    )
+    storage_client.set("system:settings", merged.model_dump_json())
+    return merged
 
 
 def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:

@@ -175,6 +175,76 @@ def _persist_records(fake_redis: _FakeRedis, records: list[JobRecord]) -> None:
             fake_redis.rpush(QUEUE_NAME, record.id)
 
 
+def test_system_settings_include_persistent_defaults(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
+    client, _, _ = integration_client
+
+    response = client.get("/api/v1/settings")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["worker_concurrency"] == 1
+    assert payload["default_export"] == {
+        "profile": "h264_mp4",
+        "video_export": "mp4",
+        "audio_export": "copy",
+        "subtitle_export": "none",
+        "subtitle_language": None,
+    }
+    assert payload["auto_cleanup"] == {
+        "enabled": False,
+        "retention_days": 30,
+        "keep_minimum_outputs": 10,
+    }
+    assert payload["ui"] == {"theme": "dark", "density": "comfortable"}
+
+
+def test_system_settings_persist_extended_payload(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
+    client, fake_redis, _ = integration_client
+    payload = {
+        "worker_concurrency": 3,
+        "default_export": {
+            "profile": "vp9_webm",
+            "video_export": "webm",
+            "audio_export": "opus",
+            "subtitle_export": "embedded",
+            "subtitle_language": "tur",
+        },
+        "auto_cleanup": {
+            "enabled": True,
+            "retention_days": 14,
+            "keep_minimum_outputs": 5,
+        },
+        "ui": {"theme": "system", "density": "compact"},
+    }
+
+    update_response = client.post("/api/v1/settings", json=payload)
+    get_response = client.get("/api/v1/settings")
+
+    assert update_response.status_code == 200
+    assert update_response.json() == payload
+    assert get_response.json() == payload
+    assert fake_redis.get("system:settings") is not None
+
+
+def test_system_settings_accept_legacy_worker_only_payload(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
+    client, _, _ = integration_client
+
+    response = client.post("/api/v1/settings", json={"worker_concurrency": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["worker_concurrency"] == 2
+    assert payload["default_export"]["profile"] == "h264_mp4"
+    assert payload["auto_cleanup"]["enabled"] is False
+    assert payload["ui"]["theme"] == "dark"
+
+
 def test_health_endpoints_report_liveness_and_readiness(
     integration_client: tuple[TestClient, _FakeRedis, Path],
 ) -> None:

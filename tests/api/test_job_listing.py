@@ -13,6 +13,18 @@ class _FakeJobRepository:
     def list_ids(self) -> list[str]:
         return list(self._ids)
 
+    def list_records_page(
+        self, *, cursor: int = 0, limit: int = 100, newest_first: bool = True
+    ) -> tuple[list[JobRecord], int | None]:
+        ids = list(reversed(self._ids)) if newest_first else list(self._ids)
+        page_ids = ids[cursor : cursor + limit]
+        records = [api._get_job_record(job_id) for job_id in page_ids]
+        next_cursor = cursor + len(page_ids) if cursor + len(page_ids) < len(ids) else None
+        return [record for record in records if record is not None], next_cursor
+
+    def count_running_jobs(self) -> int:
+        return 0
+
     def lrange(self, key: str, start: int, end: int) -> list[str]:
         return list(self._ids)
 

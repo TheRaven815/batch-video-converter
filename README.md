@@ -283,7 +283,8 @@ Health and readiness (Unauthenticated):
 
 Authentication:
 
-- `POST /api/v1/auth/token` accepts OAuth2 form data (`username`, `password`) to issue a JWT access token.
+- `POST /api/v1/auth/login` is the canonical login endpoint. It accepts OAuth2 form data (`username`, `password`) and returns `{ "access_token": "...", "token_type": "bearer" }`. Invalid credentials return HTTP 401 with `Invalid username or password`.
+- `POST /api/v1/auth/token` remains available as a backward-compatible alias for older clients, but new integrations should use `/login`.
 
 Jobs and batches (Require Bearer Token):
 
@@ -308,6 +309,35 @@ Media and outputs (Require Bearer Token):
 - `GET /api/v1/outputs` lists generated output files.
 - `GET /api/v1/outputs/{filename}/download` downloads a sanitized output file.
 - `GET /api/v1/worker/health` reports queue depth, running job count, and storage health.
+
+System settings (Require Bearer Token):
+
+- `GET /api/v1/settings` returns persisted system settings with safe defaults for missing legacy fields.
+- `POST /api/v1/settings` persists `worker_concurrency`, `default_export`, `auto_cleanup`, and `ui` preferences. Older clients may still send only `worker_concurrency`.
+
+Typical settings payload:
+
+```json
+{
+  "worker_concurrency": 1,
+  "default_export": {
+    "profile": "h264_mp4",
+    "video_export": "mp4",
+    "audio_export": "copy",
+    "subtitle_export": "none",
+    "subtitle_language": null
+  },
+  "auto_cleanup": {
+    "enabled": false,
+    "retention_days": 30,
+    "keep_minimum_outputs": 10
+  },
+  "ui": {
+    "theme": "dark",
+    "density": "comfortable"
+  }
+}
+```
 
 Typical job payload:
 

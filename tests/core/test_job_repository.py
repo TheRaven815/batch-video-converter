@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from video_converter.core.config import JOBS_INDEX_KEY, QUEUE_NAME
-from video_converter.core.job_repository import JobRepository
+from video_converter.core.job_repository import RUNNING_JOBS_INDEX_KEY, JobRepository
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
 
@@ -38,7 +38,11 @@ class _Pipeline:
 class _FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
-        self.lists: dict[str, list[str]] = {QUEUE_NAME: [], JOBS_INDEX_KEY: []}
+        self.lists: dict[str, list[str]] = {
+            QUEUE_NAME: [],
+            JOBS_INDEX_KEY: [],
+            RUNNING_JOBS_INDEX_KEY: [],
+        }
 
     def pipeline(self, transaction: bool = True) -> _Pipeline:
         return _Pipeline(self)
@@ -59,6 +63,9 @@ class _FakeRedis:
         if end == -1:
             return values[start:]
         return values[start : end + 1]
+
+    def llen(self, key: str) -> int:
+        return len(self.lists.get(key, []))
 
     def lrem(self, key: str, count: int, value: str) -> int:
         values = self.lists.setdefault(key, [])
@@ -106,6 +113,17 @@ def test_enqueue_many_persists_index_and_queue_in_one_pipeline() -> None:
     assert repository.get("job-2") is not None
 
 
+def test_list_records_page_reads_only_requested_index_slice() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    repository.enqueue_many([_make_job(f"job-{idx}", JobStatus.queued) for idx in range(1, 6)])
+
+    records, next_cursor = repository.list_records_page(cursor=1, limit=2, newest_first=True)
+
+    assert [record.id for record in records] == ["job-4", "job-3"]
+    assert next_cursor == 3
+
+
 def test_recover_stale_running_jobs_requeues_only_old_running_jobs() -> None:
     fake_redis = _FakeRedis()
     repository = JobRepository(fake_redis)  # type: ignore[arg-type]
@@ -125,5 +143,7 @@ def test_recover_stale_running_jobs_requeues_only_old_running_jobs() -> None:
     assert recovered_stale.status == JobStatus.queued
     assert recovered_stale.progress_phase == "queued"
     assert fake_redis.lists[QUEUE_NAME] == ["stale"]
+    assert fake_redis.lists[RUNNING_JOBS_INDEX_KEY] == ["fresh"]
+    assert repository.count_running_jobs() == 1
     assert repository.get("fresh").status == JobStatus.running  # type: ignore[union-attr]
     assert repository.get("done").status == JobStatus.completed  # type: ignore[union-attr]

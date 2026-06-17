@@ -19,6 +19,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 logger = logging.getLogger(__name__)
 
+INVALID_CREDENTIALS_MESSAGE = "Invalid username or password"
+INVALID_TOKEN_MESSAGE = "Could not validate credentials"
+
 _storage_client = None
 
 
@@ -90,7 +93,7 @@ async def get_current_user(
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail=INVALID_TOKEN_MESSAGE,
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -110,8 +113,7 @@ async def get_current_user(
     return username
 
 
-@router.post("/login", response_model=Token)
-async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]) -> Token:
+async def _issue_login_token(form_data: OAuth2PasswordRequestForm) -> Token:
     settings = get_settings()
     if not settings.app_password:
         return Token(access_token="no-auth-required", token_type="bearer")
@@ -123,7 +125,7 @@ async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]) -> T
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail=INVALID_CREDENTIALS_MESSAGE,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -132,6 +134,16 @@ async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]) -> T
         data={"sub": creds["username"]}, expires_delta=access_token_expires
     )
     return Token(access_token=access_token, token_type="bearer")
+
+
+@router.post("/login", response_model=Token)
+async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]) -> Token:
+    return await _issue_login_token(form_data)
+
+
+@router.post("/token", response_model=Token, include_in_schema=False)
+async def token_alias(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]) -> Token:
+    return await _issue_login_token(form_data)
 
 
 class CredentialsUpdateRequest(BaseModel):
@@ -146,7 +158,7 @@ async def update_credentials(
 ):
     creds = get_active_credentials()
     if hash_password(req.current_password) != creds["password_hash"]:
-        raise HTTPException(status_code=400, detail="Incorrect current password")
+        raise HTTPException(status_code=400, detail="Invalid current password")
 
     if not req.new_username and not req.new_password:
         raise HTTPException(status_code=400, detail="No new credentials provided")

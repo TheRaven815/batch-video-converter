@@ -225,5 +225,35 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class AutoCleanupSettings(BaseModel):
+    enabled: bool = False
+    retention_days: int = Field(default=30, ge=1, le=365)
+    keep_minimum_outputs: int = Field(default=10, ge=0, le=10000)
+
+
+class UiPreferences(BaseModel):
+    theme: str = Field(default="dark", pattern="^(dark|light|system)$")
+    density: str = Field(default="comfortable", pattern="^(comfortable|compact)$")
+
+
+class DefaultExportSettings(BaseModel):
+    profile: str = Field(default="h264_mp4", max_length=100)
+    video_export: str = Field(default="mp4", max_length=16)
+    audio_export: str = Field(default="copy", max_length=16)
+    subtitle_export: str = Field(default="none", max_length=32)
+    subtitle_language: Optional[str] = Field(default=None, max_length=32)
+
+    @field_validator("subtitle_language", mode="before")
+    @classmethod
+    def _normalize_subtitle_language(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+
 class SystemSettings(BaseModel):
     worker_concurrency: int = Field(default=1, ge=1, le=8)
+    default_export: DefaultExportSettings = Field(default_factory=DefaultExportSettings)
+    auto_cleanup: AutoCleanupSettings = Field(default_factory=AutoCleanupSettings)
+    ui: UiPreferences = Field(default_factory=UiPreferences)

@@ -421,7 +421,10 @@ def _run_ffmpeg_with_progress(
             bufsize=1,
         )
     except FileNotFoundError:
-        return 127, "ffmpeg executable not found. Please ensure FFmpeg is installed and in your PATH."
+        return (
+            127,
+            "ffmpeg executable not found. Please ensure FFmpeg is installed and in your PATH.",
+        )
 
     stderr_lines: list[str] = []
 

@@ -51,9 +51,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const text = await response.text().catch(() => '');
     try {
       const parsed = JSON.parse(text) as StructuredErrorResponse;
-      if (parsed.error?.message) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+      if (parsed.error?.message) throw new Error(parsed.error.message);
     } catch (error) {
-      if (error instanceof Error && error.message.includes(':')) throw error;
+      if (error instanceof Error && error.message) throw error;
     }
     throw new Error(`${init?.method || 'GET'} ${path} failed with ${response.status}${text ? `: ${text}` : ''}`);
   }
@@ -190,6 +190,13 @@ export async function authLogin(username: string, password: string): Promise<str
   });
 
   if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    try {
+      const parsed = JSON.parse(text) as StructuredErrorResponse;
+      if (parsed.error?.message) throw new Error(parsed.error.message);
+    } catch (error) {
+      if (error instanceof Error && error.message) throw error;
+    }
     throw new Error('Invalid username or password');
   }
 

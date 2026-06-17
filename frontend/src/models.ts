@@ -192,6 +192,31 @@ export interface JobFilters {
   sourceType: 'all' | 'server' | 'legacy';
 }
 
+export type UiTheme = 'dark' | 'light' | 'system';
+export type UiDensity = 'comfortable' | 'compact';
+
+export interface DefaultExportSettings {
+  profile: string;
+  video_export: VideoExport;
+  audio_export: AudioExport;
+  subtitle_export: SubtitleExport;
+  subtitle_language: string | null;
+}
+
+export interface AutoCleanupSettings {
+  enabled: boolean;
+  retention_days: number;
+  keep_minimum_outputs: number;
+}
+
+export interface UiPreferences {
+  theme: UiTheme;
+  density: UiDensity;
+}
+
 export interface SystemSettings {
   worker_concurrency: number;
+  default_export: DefaultExportSettings;
+  auto_cleanup: AutoCleanupSettings;
+  ui: UiPreferences;
 }
