@@ -9,14 +9,15 @@ import type {
 } from '../models';
 import { downloadJobLog, downloadOutput, getProtectedMediaUrl } from '../api';
 import { statusVariant, getProgress, formatEta, formatDate, formatBytes } from '../utils/helpers';
-import { statusLabels } from '../utils/constants';
 import { Trash2, Download, Layers, Archive, Cpu, X, Play, FileText } from 'lucide-react';
+import { useI18n, type MessageKey } from '../i18n';
 
 export function HealthPill({ label, ok, meta }: { label: string; ok: boolean; meta?: string }) {
+  const { t } = useI18n();
   return (
     <div
       className="status-item"
-      title={`${label}: ${ok ? 'OK' : 'Error'}${meta ? ` (${meta})` : ''}`}
+      title={`${label}: ${ok ? t('common.status.ok') : t('common.status.error')}${meta ? ` (${meta})` : ''}`}
     >
       <span className={`status-dot ${ok ? 'ok' : 'error'} ${ok && !meta ? 'pulse' : ''}`}></span>
       <span>
@@ -32,6 +33,7 @@ export function HealthPill({ label, ok, meta }: { label: string; ok: boolean; me
 }
 
 export function StatusBadge({ status }: { status: JobStatus }) {
+  const { t } = useI18n();
   const variant = statusVariant(status);
   let icon = null;
   if (variant === 'done')
@@ -63,7 +65,7 @@ export function StatusBadge({ status }: { status: JobStatus }) {
   return (
     <span className={`badge badge-${variant}`}>
       {icon}
-      <span>{statusLabels[status] || status}</span>
+      <span>{t(`status.${status}` as MessageKey)}</span>
     </span>
   );
 }
@@ -95,7 +97,7 @@ export function ConfirmDialog({
   open,
   title,
   body,
-  confirmLabel = 'Delete',
+  confirmLabel,
   danger = true,
   onConfirm,
   onCancel,
@@ -108,6 +110,7 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -132,10 +135,10 @@ export function ConfirmDialog({
         <p className="modal-body">{body}</p>
         <div className="modal-actions">
           <button className="btn btn-outline" onClick={onCancel} autoFocus>
-            Cancel
+            {t('common.cancel')}
           </button>
           <button className={danger ? 'btn btn-danger' : 'btn btn-primary'} onClick={onConfirm}>
-            {confirmLabel}
+            {confirmLabel ?? t('common.delete')}
           </button>
         </div>
       </div>
@@ -161,6 +164,7 @@ function DetailItem({
 }
 
 export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClose: () => void }) {
+  const { language, t } = useI18n();
   useEffect(() => {
     if (!job) return;
     const onKey = (e: KeyboardEvent) => {
@@ -189,7 +193,7 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
         className="detail-drawer"
         role="dialog"
         aria-modal="true"
-        aria-label={`Job details: ${name}`}
+        aria-label={t('job.details', { name })}
       >
         <div className="detail-header">
           <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
@@ -198,14 +202,14 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
               {name}
             </h3>
           </div>
-          <button className="btn-icon" onClick={onClose} aria-label="Close details">
+          <button className="btn-icon" onClick={onClose} aria-label={t('job.closeDetails')}>
             <X size={16} />
           </button>
         </div>
 
         {job.error_message && (
           <div className="detail-section">
-            <span className="detail-section-title">Error</span>
+            <span className="detail-section-title">{t('job.error')}</span>
             <div className="form-alert-error font-mono" style={{ overflowWrap: 'anywhere' }}>
               {job.error_message}
             </div>
@@ -213,23 +217,27 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
         )}
 
         <div className="detail-section">
-          <span className="detail-section-title">Overview</span>
+          <span className="detail-section-title">{t('job.overview')}</span>
           <div className="detail-grid">
-            <DetailItem label="Progress" value={`${getProgress(job)}%`} mono />
-            <DetailItem label="Phase" value={job.progress_phase || '—'} />
-            <DetailItem label="Profile" value={job.profile} mono />
+            <DetailItem label={t('job.progress')} value={`${getProgress(job)}%`} mono />
+            <DetailItem label={t('job.phase')} value={job.progress_phase || '—'} />
+            <DetailItem label={t('job.profile')} value={job.profile} mono />
             <DetailItem
-              label="Target"
+              label={t('job.target')}
               value={`${job.video_export} / ${job.audio_export} / ${job.subtitle_export}`}
               mono
             />
-            <DetailItem label="Attempts" value={job.attempt_count} mono />
-            <DetailItem label="Batch" value={job.batch_id ? job.batch_id.slice(0, 8) : '—'} mono />
-            <DetailItem label="Created" value={formatDate(job.created_at)} />
-            <DetailItem label="Started" value={formatDate(job.started_at)} />
-            <DetailItem label="Finished" value={formatDate(job.finished_at)} />
+            <DetailItem label={t('job.attempts')} value={job.attempt_count} mono />
             <DetailItem
-              label="Output"
+              label={t('job.batch')}
+              value={job.batch_id ? job.batch_id.slice(0, 8) : '—'}
+              mono
+            />
+            <DetailItem label={t('job.created')} value={formatDate(job.created_at, language)} />
+            <DetailItem label={t('job.started')} value={formatDate(job.started_at, language)} />
+            <DetailItem label={t('job.finished')} value={formatDate(job.finished_at, language)} />
+            <DetailItem
+              label={t('job.output')}
               value={
                 job.output_filename ? (
                   <button
@@ -249,24 +257,28 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
 
         {isRunning && (
           <div className="detail-section">
-            <span className="detail-section-title">Live Telemetry</span>
+            <span className="detail-section-title">{t('job.liveTelemetry')}</span>
             <div className="detail-grid">
               <DetailItem label="FPS" value={job.progress_fps ?? '—'} mono />
-              <DetailItem label="Speed" value={job.progress_speed ?? '—'} mono />
-              <DetailItem label="Bitrate" value={job.progress_bitrate ?? '—'} mono />
-              <DetailItem label="ETA" value={formatEta(job.progress_eta_seconds)} mono />
+              <DetailItem label={t('job.speed')} value={job.progress_speed ?? '—'} mono />
+              <DetailItem label={t('job.bitrate')} value={job.progress_bitrate ?? '—'} mono />
+              <DetailItem
+                label={t('job.eta')}
+                value={formatEta(job.progress_eta_seconds, language)}
+                mono
+              />
             </div>
           </div>
         )}
 
         {telemetry.length > 1 && (
           <div className="detail-section">
-            <span className="detail-section-title">Progress History</span>
+            <span className="detail-section-title">{t('job.progressHistory')}</span>
             <svg
               className="telemetry-chart"
               viewBox="0 0 300 90"
               role="img"
-              aria-label="Conversion progress over time"
+              aria-label={t('job.progressChart')}
             >
               <polyline
                 points={telemetry
@@ -283,14 +295,14 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
 
         {timeline.length > 0 && (
           <div className="detail-section">
-            <span className="detail-section-title">Timeline</span>
+            <span className="detail-section-title">{t('job.timeline')}</span>
             <ol className="timeline-list">
               {timeline
                 .slice()
                 .reverse()
                 .map((entry, index) => (
                   <li className="timeline-item" key={index}>
-                    <span className="timeline-time">{formatDate(entry.at)}</span>
+                    <span className="timeline-time">{formatDate(entry.at, language)}</span>
                     <span>
                       <span className="text-zinc-300">{entry.phase || entry.status}</span>
                       {entry.message ? (
@@ -305,20 +317,22 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
 
         <div className="detail-section">
           <div className="detail-section-header">
-            <span className="detail-section-title">FFmpeg Log (last {logTail.length} lines)</span>
+            <span className="detail-section-title">
+              {t('job.logTitle', { count: logTail.length })}
+            </span>
             <button
               className="btn btn-outline"
               onClick={() => void downloadJobLog(job.id)}
-              title="Download complete FFmpeg log"
+              title={t('job.downloadLog')}
             >
-              <FileText size={12} /> Full log
+              <FileText size={12} /> {t('job.fullLog')}
             </button>
           </div>
           {logTail.length ? (
             <pre className="log-box">{logTail.join('\n')}</pre>
           ) : (
             <p className="text-xs text-zinc-500" style={{ margin: 0 }}>
-              No log output yet.
+              {t('job.noLog')}
             </p>
           )}
         </div>
@@ -340,25 +354,28 @@ export function OutputsPanel({
   onDownload?: (filename: string) => void;
   onDelete?: (filename: string) => void;
 }) {
+  const { language, t } = useI18n();
   return (
     <div className="sidebar-panel">
       <div className="sidebar-header">
         <span className="sidebar-title">
           <Archive size={14} className="text-zinc-400" />
-          <span>Recent Outputs</span>
+          <span>{t('outputs.title')}</span>
         </span>
         <div className="flex items-center gap-2">
           {onClear && outputs.length > 0 && (
             <button
               onClick={onClear}
               className="btn-icon"
-              title="Clear All Outputs"
-              aria-label="Clear all outputs"
+              title={t('outputs.clear')}
+              aria-label={t('outputs.clear')}
             >
               <Trash2 size={14} />
             </button>
           )}
-          <span className="text-xs font-mono text-zinc-500">{outputs.length} Files</span>
+          <span className="text-xs font-mono text-zinc-500">
+            {t('outputs.files', { count: outputs.length })}
+          </span>
         </div>
       </div>
       <div className="space-y-2 outputs-scroll pr-1">
@@ -367,14 +384,14 @@ export function OutputsPanel({
             <div className="output-item" key={output.filename}>
               <OutputThumbnail
                 path={output.thumbnail_url}
-                alt={`Thumbnail for ${output.filename}`}
+                alt={t('outputs.thumbnail', { filename: output.filename })}
               />
               <div className="output-item-info">
                 <p className="text-xs font-medium text-zinc-300 truncate" title={output.filename}>
                   {output.filename}
                 </p>
                 <span className="text-xs font-mono text-zinc-500 block mt-1">
-                  {formatDate(output.modified_at)} • {formatBytes(output.size_bytes)}
+                  {formatDate(output.modified_at, language)} • {formatBytes(output.size_bytes)}
                 </span>
               </div>
               <button
@@ -385,16 +402,16 @@ export function OutputsPanel({
                   );
                 }}
                 className="output-btn"
-                title="Preview"
-                aria-label={`Preview ${output.filename}`}
+                title={t('common.preview')}
+                aria-label={t('outputs.previewNamed', { filename: output.filename })}
               >
                 <Play size={12} />
               </button>
               <button
                 onClick={() => onDownload?.(output.filename)}
                 className="output-btn"
-                title="Download"
-                aria-label={`Download ${output.filename}`}
+                title={t('common.download')}
+                aria-label={t('outputs.downloadNamed', { filename: output.filename })}
               >
                 <Download size={12} />
               </button>
@@ -402,8 +419,8 @@ export function OutputsPanel({
                 <button
                   onClick={() => onDelete(output.filename)}
                   className="output-btn"
-                  title="Delete"
-                  aria-label={`Delete ${output.filename}`}
+                  title={t('common.delete')}
+                  aria-label={t('outputs.deleteNamed', { filename: output.filename })}
                 >
                   <Trash2 size={12} />
                 </button>
@@ -412,7 +429,7 @@ export function OutputsPanel({
           ))
         ) : (
           <div className="text-center py-6">
-            <p className="text-xs text-zinc-500">No completed outputs yet.</p>
+            <p className="text-xs text-zinc-500">{t('outputs.empty')}</p>
           </div>
         )}
       </div>
@@ -439,6 +456,7 @@ export function SystemResourcesPanel({
 }: {
   workerHealth: WorkerHealthResponse | null;
 }) {
+  const { t } = useI18n();
   const cpuPercent = workerHealth?.cpu_percent ?? 0;
   const diskPercent = workerHealth?.disk_used_percent ?? 0;
 
@@ -447,22 +465,22 @@ export function SystemResourcesPanel({
       <div className="sidebar-header">
         <span className="sidebar-title">
           <Cpu size={14} className="text-zinc-400" />
-          <span>System Resources</span>
+          <span>{t('resources.title')}</span>
         </span>
         {!workerHealth ? (
-          <span className="text-xs font-mono text-zinc-500">Offline</span>
+          <span className="text-xs font-mono text-zinc-500">{t('common.offline')}</span>
         ) : cpuPercent > 85 ? (
-          <span className="text-xs font-mono text-rose-500">High Load</span>
+          <span className="text-xs font-mono text-rose-500">{t('resources.highLoad')}</span>
         ) : cpuPercent > 50 ? (
-          <span className="text-xs font-mono text-amber-500">Moderate</span>
+          <span className="text-xs font-mono text-amber-500">{t('resources.moderate')}</span>
         ) : (
-          <span className="text-xs font-mono text-emerald-500">Stable</span>
+          <span className="text-xs font-mono text-emerald-500">{t('resources.stable')}</span>
         )}
       </div>
 
       <div className="resource-item">
         <div className="resource-label">
-          <span>CPU Usage</span>
+          <span>{t('resources.cpu')}</span>
           <span className="font-mono">{cpuPercent}%</span>
         </div>
         <div className="resource-track">
@@ -474,8 +492,12 @@ export function SystemResourcesPanel({
       </div>
       <div className="resource-item">
         <div className="resource-label">
-          <span>Disk</span>
-          <span className="font-mono">{formatBytes(workerHealth?.disk_free_bytes ?? 0)} free</span>
+          <span>{t('resources.disk')}</span>
+          <span className="font-mono">
+            {t('resources.free', {
+              value: formatBytes(workerHealth?.disk_free_bytes ?? 0),
+            })}
+          </span>
         </div>
         <div className="resource-track">
           <div
@@ -488,15 +510,15 @@ export function SystemResourcesPanel({
         </div>
       </div>
       <div className="resource-label">
-        <span>Worker heartbeat</span>
+        <span>{t('resources.workerHeartbeat')}</span>
         <span className={workerHealth?.worker_online ? 'text-emerald-400' : 'text-rose-400'}>
-          {workerHealth?.worker_online ? 'Online' : 'Offline'}
+          {workerHealth?.worker_online ? t('common.online') : t('common.offline')}
         </span>
       </div>
 
       <div className="resource-item">
         <div className="resource-label">
-          <span>Active Jobs</span>
+          <span>{t('resources.activeJobs')}</span>
           <span className="font-mono">{workerHealth?.running_jobs || 0}</span>
         </div>
         <div className="resource-track">
@@ -526,6 +548,8 @@ export function JobControls({
   setSelectedJobIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   runBulkAction: (action: 'cancel' | 'start' | 'archive' | 'delete') => void;
 }) {
+  const { t } = useI18n();
+  const statuses: JobStatus[] = ['queued', 'running', 'cancelled', 'completed', 'failed'];
   return (
     <div className="panel-toolbar">
       <div className="panel-filters">
@@ -534,9 +558,9 @@ export function JobControls({
             type="text"
             value={filters.q}
             onChange={(e) => setFilters((v) => ({ ...v, q: e.target.value }))}
-            placeholder="Search in queue..."
+            placeholder={t('job.searchPlaceholder')}
             className="form-input has-icon"
-            aria-label="Search jobs"
+            aria-label={t('job.searchAria')}
           />
           <span className="input-icon">
             <svg
@@ -562,12 +586,12 @@ export function JobControls({
           }
           className="form-input"
           style={{ width: 'auto' }}
-          aria-label="Filter by status"
+          aria-label={t('job.filterStatus')}
         >
-          <option value="all">All Statuses</option>
-          {Object.keys(statusLabels).map((status) => (
+          <option value="all">{t('job.allStatuses')}</option>
+          {statuses.map((status) => (
             <option key={status} value={status}>
-              {statusLabels[status as JobStatus]}
+              {t(`status.${status}` as MessageKey)}
             </option>
           ))}
         </select>
@@ -577,9 +601,9 @@ export function JobControls({
           onChange={(e) => setFilters((v) => ({ ...v, profile: e.target.value }))}
           className="form-input"
           style={{ width: 'auto' }}
-          aria-label="Filter by profile"
+          aria-label={t('job.filterProfile')}
         >
-          <option value="">All Profiles</option>
+          <option value="">{t('job.allProfiles')}</option>
           <option value="h264_mp4">H.264 MP4</option>
           <option value="h265_mp4">H.265 MKV</option>
           <option value="vp9_webm">WebM VP9</option>
@@ -592,11 +616,11 @@ export function JobControls({
           }
           className="form-input"
           style={{ width: 'auto' }}
-          aria-label="Sort jobs"
+          aria-label={t('job.sort')}
         >
-          <option value="newest">Newest First</option>
-          <option value="oldest">Oldest First</option>
-          <option value="progress">By Progress</option>
+          <option value="newest">{t('job.sortNewest')}</option>
+          <option value="oldest">{t('job.sortOldest')}</option>
+          <option value="progress">{t('job.sortProgress')}</option>
         </select>
       </div>
 
@@ -606,35 +630,35 @@ export function JobControls({
           disabled={!selectedCount}
           className="btn btn-outline"
         >
-          Start
+          {t('common.start')}
         </button>
         <button
           onClick={() => runBulkAction('cancel')}
           disabled={!selectedCount}
           className="btn btn-outline"
         >
-          Cancel
+          {t('common.cancel')}
         </button>
         <button
           onClick={() => runBulkAction('archive')}
           disabled={!selectedCount}
           className="btn btn-outline"
         >
-          Archive
+          {t('common.archive')}
         </button>
         <button
           onClick={() => setSelectedJobIds(new Set())}
           disabled={!selectedCount}
           className="btn btn-outline"
         >
-          Clear
+          {t('common.clear')}
         </button>
         <button
           onClick={() => runBulkAction('delete')}
           disabled={!selectedCount}
           className="btn btn-danger"
         >
-          Delete Selected
+          {t('job.deleteSelected')}
         </button>
       </div>
     </div>
@@ -658,17 +682,13 @@ export function JobList({
   onCancelJob: (id: string) => void;
   onDeleteJob: (id: string) => void;
 }) {
+  const { language, t } = useI18n();
   if (jobsLoading && !jobs.length) {
-    return <div className="p-8 text-center text-zinc-500">Loading jobs...</div>;
+    return <div className="p-8 text-center text-zinc-500">{t('job.loading')}</div>;
   }
 
   if (!jobs.length) {
-    return (
-      <EmptyState
-        title="Queue is Empty"
-        body="Add media files from the Convert tab to start processing."
-      />
-    );
+    return <EmptyState title={t('job.emptyTitle')} body={t('job.emptyBody')} />;
   }
 
   const allVisibleSelected = jobs.length > 0 && jobs.every((job) => selectedJobIds.has(job.id));
@@ -693,15 +713,15 @@ export function JobList({
                 className="form-checkbox"
                 checked={allVisibleSelected}
                 onChange={(e) => toggleAll(e.target.checked)}
-                aria-label="Select all visible jobs"
+                aria-label={t('job.selectAll')}
               />
             </th>
-            <th>File Name</th>
-            <th style={{ width: '7rem' }}>Profile</th>
-            <th style={{ width: '10rem' }}>Progress</th>
-            <th style={{ width: '6rem' }}>Target</th>
-            <th style={{ width: '7rem' }}>Status</th>
-            <th style={{ width: '4rem', textAlign: 'right' }}>Action</th>
+            <th>{t('job.fileName')}</th>
+            <th style={{ width: '7rem' }}>{t('job.profile')}</th>
+            <th style={{ width: '10rem' }}>{t('job.progress')}</th>
+            <th style={{ width: '6rem' }}>{t('job.target')}</th>
+            <th style={{ width: '7rem' }}>{t('job.status')}</th>
+            <th style={{ width: '4rem', textAlign: 'right' }}>{t('job.action')}</th>
           </tr>
         </thead>
         <tbody>
@@ -722,7 +742,7 @@ export function JobList({
                     type="checkbox"
                     className="form-checkbox"
                     checked={isSelected}
-                    aria-label={`Select ${name}`}
+                    aria-label={t('job.select', { name })}
                     onChange={(e) => {
                       setSelectedJobIds((prev) => {
                         const next = new Set(prev);
@@ -743,13 +763,15 @@ export function JobList({
                   </div>
                 </td>
                 <td className="font-mono text-zinc-400 text-xs truncate">
-                  {job.profile || 'default'}
+                  {job.profile || t('common.default')}
                 </td>
                 <td>
                   <div className="progress-container">
                     <div className="progress-text">
                       <span>{progress}%</span>
-                      {variant === 'running' && <span>{formatEta(job.progress_eta_seconds)}</span>}
+                      {variant === 'running' && (
+                        <span>{formatEta(job.progress_eta_seconds, language)}</span>
+                      )}
                     </div>
                     <div className="progress-track">
                       <div
@@ -761,7 +783,7 @@ export function JobList({
                 </td>
                 <td className="font-mono text-zinc-400 text-xs">
                   {job.status === 'queued' && job.queue_position
-                    ? `#${job.queue_position} · ETA ${formatEta(job.estimated_start_seconds).replace('ETA ', '')}`
+                    ? `#${job.queue_position} · ${formatEta(job.estimated_start_seconds, language)}`
                     : `${job.video_export}/${job.audio_export}`}
                 </td>
                 <td>
@@ -772,8 +794,8 @@ export function JobList({
                     <button
                       onClick={() => onCancelJob(job.id)}
                       className="btn-icon"
-                      title="Cancel Job"
-                      aria-label={`Cancel ${name}`}
+                      title={t('job.cancel')}
+                      aria-label={t('job.cancelNamed', { name })}
                     >
                       <svg
                         width="14"
@@ -794,8 +816,8 @@ export function JobList({
                     <button
                       onClick={() => onDeleteJob(job.id)}
                       className="btn-icon"
-                      title="Delete Job"
-                      aria-label={`Delete ${name}`}
+                      title={t('job.delete')}
+                      aria-label={t('job.deleteNamed', { name })}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -817,12 +839,13 @@ export function BatchPanel({
   batches: BatchSummaryDto[];
   onAction: (batchId: string, action: 'cancel' | 'retry' | 'archive' | 'delete') => void;
 }) {
+  const { t } = useI18n();
   if (!batches.length) return null;
   return (
     <div className="panel batch-panel">
       <div className="sidebar-header">
         <span className="sidebar-title">
-          <Layers size={14} /> Recent Batches
+          <Layers size={14} /> {t('batches.title')}
         </span>
       </div>
       <div className="batch-grid">
@@ -839,26 +862,30 @@ export function BatchPanel({
               />
             </div>
             <p className="text-xs text-zinc-500">
-              {batch.completed} done · {batch.running} running · {batch.failed} failed
+              {t('batches.summary', {
+                completed: batch.completed,
+                running: batch.running,
+                failed: batch.failed,
+              })}
             </p>
             <div className="batch-actions">
               <button
                 className="btn btn-outline"
                 onClick={() => onAction(batch.batch_id, 'cancel')}
               >
-                Cancel
+                {t('common.cancel')}
               </button>
               <button className="btn btn-outline" onClick={() => onAction(batch.batch_id, 'retry')}>
-                Retry
+                {t('common.retry')}
               </button>
               <button
                 className="btn btn-outline"
                 onClick={() => onAction(batch.batch_id, 'archive')}
               >
-                Archive
+                {t('common.archive')}
               </button>
               <button className="btn btn-danger" onClick={() => onAction(batch.batch_id, 'delete')}>
-                Delete
+                {t('common.delete')}
               </button>
             </div>
           </article>

@@ -1,14 +1,15 @@
 import type { ExportProfile, JobRecord, JobStatus } from '../models';
+import type { AppLanguage } from '../i18n';
 
 export function fileName(path: string): string {
   return path.split('/').filter(Boolean).pop() || path || 'video';
 }
 
-export function formatDate(value?: string | null): string {
+export function formatDate(value?: string | null, language: AppLanguage = 'en'): string {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(language === 'tr' ? 'tr-TR' : 'en-GB', {
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
@@ -28,13 +29,15 @@ export function formatBytes(bytes: number): string {
   return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-export function formatEta(seconds?: number | null): string {
-  if (seconds === null || seconds === undefined) return 'ETA —';
-  if (seconds < 60) return `ETA ${seconds}s`;
+export function formatEta(seconds?: number | null, language: AppLanguage = 'en'): string {
+  const prefix = language === 'tr' ? 'Tahmini' : 'ETA';
+  if (seconds === null || seconds === undefined) return `${prefix} —`;
+  if (seconds < 60) return `${prefix} ${seconds}${language === 'tr' ? ' sn' : 's'}`;
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours > 0) return `ETA ${hours}h ${minutes}m`;
-  return `ETA ${minutes}m ${seconds % 60}s`;
+  if (hours > 0)
+    return `${prefix} ${hours} ${language === 'tr' ? 'sa' : 'h'} ${minutes} ${language === 'tr' ? 'dk' : 'm'}`;
+  return `${prefix} ${minutes} ${language === 'tr' ? 'dk' : 'm'} ${seconds % 60} ${language === 'tr' ? 'sn' : 's'}`;
 }
 
 export function deriveProfile(videoExport: string): ExportProfile {

@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { authLogin, setAuthToken, getSetupStatus, completeSetup } from '../api';
 import { Video } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 type Mode = 'loading' | 'login' | 'setup';
 
 export function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<Mode>('loading');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -29,21 +31,21 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !password) {
-      setError('Username and password are required');
+      setError(t('auth.required'));
       return;
     }
 
     if (mode === 'setup') {
       if (username.trim().length < 3) {
-        setError('Username must be at least 3 characters');
+        setError(t('auth.usernameLength'));
         return;
       }
       if (password.length < 8) {
-        setError('Password must be at least 8 characters');
+        setError(t('auth.passwordLength'));
         return;
       }
       if (password !== confirmPassword) {
-        setError('Passwords do not match');
+        setError(t('auth.passwordMismatch'));
         return;
       }
     }
@@ -59,7 +61,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
       setAuthToken(token);
       onLogin();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid credentials');
+      setError(err instanceof Error ? err.message : t('auth.invalidCredentials'));
     } finally {
       setLoading(false);
     }
@@ -75,16 +77,16 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             <Video size={24} />
           </div>
           <h2 className="text-lg font-semibold text-zinc-100" style={{ margin: 0 }}>
-            Video Converter
+            {t('app.name')}
           </h2>
           <p className="text-xs text-zinc-400" style={{ margin: 0 }}>
-            {isSetup ? 'First-time setup — create your admin account' : 'Secure Access'}
+            {isSetup ? t('auth.firstSetup') : t('auth.secureAccess')}
           </p>
         </div>
 
         {mode === 'loading' ? (
           <p className="text-xs text-zinc-500" style={{ textAlign: 'center', padding: '1rem 0' }}>
-            Loading…
+            {t('auth.loading')}
           </p>
         ) : (
           <form
@@ -92,13 +94,13 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}
           >
             <div className="form-group">
-              <label className="form-label">Username</label>
+              <label className="form-label">{t('auth.username')}</label>
               <input
                 type="text"
                 className="form-input"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Username"
+                placeholder={t('auth.usernamePlaceholder')}
                 autoComplete="username"
                 autoFocus
                 disabled={loading}
@@ -106,13 +108,13 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label">Password</label>
+              <label className="form-label">{t('auth.password')}</label>
               <input
                 type="password"
                 className="form-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={isSetup ? 'At least 8 characters' : 'Password'}
+                placeholder={isSetup ? t('auth.passwordHint') : t('auth.passwordPlaceholder')}
                 autoComplete={isSetup ? 'new-password' : 'current-password'}
                 disabled={loading}
               />
@@ -120,13 +122,13 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
 
             {isSetup && (
               <div className="form-group">
-                <label className="form-label">Confirm Password</label>
+                <label className="form-label">{t('auth.confirmPassword')}</label>
                 <input
                   type="password"
                   className="form-input"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Repeat the password"
+                  placeholder={t('auth.repeatPassword')}
                   autoComplete="new-password"
                   disabled={loading}
                 />
@@ -158,11 +160,11 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
               >
                 {loading
                   ? isSetup
-                    ? 'Creating account…'
-                    : 'Authenticating…'
+                    ? t('auth.creatingAccount')
+                    : t('auth.signingIn')
                   : isSetup
-                    ? 'Create Admin Account'
-                    : 'Sign In'}
+                    ? t('auth.createAccount')
+                    : t('auth.signIn')}
               </button>
             </div>
           </form>

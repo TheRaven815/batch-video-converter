@@ -51,7 +51,7 @@ import {
   normalizeStatus,
   sortJobs,
 } from './utils/helpers';
-import { loadLanguage, translate } from './i18n';
+import { useI18n } from './i18n';
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const ConvertPage = lazy(() => import('./pages/ConvertPage'));
@@ -85,6 +85,7 @@ function initialJobFilters(): JobFilters {
 }
 
 export function App() {
+  const { language, t, toggleLanguage } = useI18n();
   const [isAuthenticated, setIsAuthenticated] = useState(Boolean(getAuthToken()));
   const server = useServerState(isAuthenticated);
   const [location, navigate] = useLocation();
@@ -107,8 +108,6 @@ export function App() {
   const [presetDescription, setPresetDescription] = useState('');
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [language, setLanguage] = useState(loadLanguage);
-
   const showToast = useCallback((message: string, kind: ToastKind = 'info') => {
     toast[kind](message, { id: `${kind}:${message}` });
   }, []);
@@ -130,12 +129,12 @@ export function App() {
         setEntries(data.entries ?? []);
         setSelectedPaths(new Set());
       } catch {
-        showToast('Failed to browse media.', 'error');
+        showToast(t('toast.browseFailed'), 'error');
       } finally {
         setBrowserLoading(false);
       }
     },
-    [selectedRootKey, showToast],
+    [selectedRootKey, showToast, t],
   );
 
   useEffect(() => {
@@ -243,134 +242,156 @@ export function App() {
         archive: bulkArchive,
         delete: bulkDelete,
       };
-      const pastTense = {
-        cancel: 'cancelled',
-        start: 'started',
-        archive: 'archived',
-        delete: 'deleted',
+      const resultKey = {
+        cancel: 'result.cancelled',
+        start: 'result.started',
+        archive: 'result.archived',
+        delete: 'result.deleted',
+      } as const;
+      const actionLabel = {
+        cancel: t('common.cancel'),
+        start: t('common.start'),
+        archive: t('common.archive'),
+        delete: t('common.delete'),
       };
       try {
         const result = await actions[action](ids);
         setSelectedJobIds(new Set());
-        const message = `${result.updated.length} job(s) ${pastTense[action]}. ${
-          result.skipped.length ? `${result.skipped.length} skipped.` : ''
-        }`;
+        const message = t('toast.bulkResult', {
+          updated: result.updated.length,
+          action: t(resultKey[action]),
+          skipped: result.skipped.length
+            ? t('toast.bulkSkipped', { count: result.skipped.length })
+            : '',
+        });
         showToast(message.trim(), result.updated.length ? 'success' : 'info');
         await server.refreshAll();
       } catch (error) {
-        showToast(error instanceof Error ? error.message : `Action ${action} failed.`, 'error');
+        showToast(
+          error instanceof Error
+            ? error.message
+            : t('toast.actionFailed', { action: actionLabel[action] }),
+          'error',
+        );
       }
     },
-    [server, showToast],
+    [server, showToast, t],
   );
 
   const runBulkAction = useCallback(
     (action: 'cancel' | 'start' | 'archive' | 'delete') => {
       const ids = [...selectedJobIds];
       if (!ids.length) {
-        showToast('Select at least one job first.', 'error');
+        showToast(t('toast.selectJob'), 'error');
         return;
       }
       if (action === 'delete') {
         setConfirmRequest({
-          title: `Delete ${ids.length} job(s)?`,
-          body: 'The job records will be permanently removed. Output files are not affected.',
-          confirmLabel: 'Delete',
+          title: t('confirm.deleteJobs.title', { count: ids.length }),
+          body: t('confirm.deleteJobs.body'),
+          confirmLabel: t('common.delete'),
           action: () => executeBulkAction(action, ids),
         });
       } else {
         void executeBulkAction(action, ids);
       }
     },
-    [executeBulkAction, selectedJobIds, showToast],
+    [executeBulkAction, selectedJobIds, showToast, t],
   );
 
   const handleCancelJob = useCallback(
     (id: string) => {
       void cancelJob(id)
         .then(server.refreshAll)
-        .catch(() => showToast('Failed to cancel job.', 'error'));
+        .catch(() => showToast(t('toast.cancelFailed'), 'error'));
     },
-    [server.refreshAll, showToast],
+    [server.refreshAll, showToast, t],
   );
 
   const handleDeleteJob = useCallback(
     (id: string) =>
       setConfirmRequest({
-        title: 'Delete job?',
-        body: 'The job record will be permanently removed. Output files are not affected.',
-        confirmLabel: 'Delete',
+        title: t('confirm.deleteJob.title'),
+        body: t('confirm.deleteJob.body'),
+        confirmLabel: t('common.delete'),
         action: () => executeBulkAction('delete', [id]),
       }),
-    [executeBulkAction],
+    [executeBulkAction, t],
   );
 
   const handleClearOutputs = useCallback(
     () =>
       setConfirmRequest({
-        title: 'Delete all output files?',
-        body: 'Every converted file in the outputs folder will be permanently deleted.',
-        confirmLabel: 'Delete All',
+        title: t('confirm.deleteOutputs.title'),
+        body: t('confirm.deleteOutputs.body'),
+        confirmLabel: t('confirm.deleteOutputs.action'),
         action: async () => {
           try {
             const result = await clearOutputs();
-            showToast(`Deleted ${result.deleted} output files.`, 'success');
+            showToast(t('toast.outputsDeleted', { count: result.deleted }), 'success');
             await server.refreshAll();
           } catch {
-            showToast('Failed to clear outputs.', 'error');
+            showToast(t('toast.outputsClearFailed'), 'error');
           }
         },
       }),
-    [server, showToast],
+    [server, showToast, t],
   );
 
   const handleDeleteOutput = useCallback(
     (filename: string) =>
       setConfirmRequest({
-        title: `Delete ${filename}?`,
-        body: 'This converted output will be permanently deleted.',
-        confirmLabel: 'Delete',
+        title: t('confirm.deleteOutput.title', { filename }),
+        body: t('confirm.deleteOutput.body'),
+        confirmLabel: t('common.delete'),
         action: async () => {
           await deleteOutput(filename);
-          showToast('Output deleted.', 'success');
+          showToast(t('toast.outputDeleted'), 'success');
           await server.refreshAll();
         },
       }),
-    [server, showToast],
+    [server, showToast, t],
   );
 
   const runBatchAction = useCallback(
     (batchId: string, action: 'cancel' | 'retry' | 'archive' | 'delete') => {
       const execute = async () => {
         const response = await actOnBatch(batchId, action);
+        const resultKey = {
+          cancel: 'result.cancelled',
+          retry: 'result.queued',
+          archive: 'result.archived',
+          delete: 'result.deleted',
+        } as const;
         showToast(
-          `${response.result.updated?.length ?? 0} job(s) ${
-            action === 'retry' ? 'queued' : `${action}ed`
-          }.`,
+          t('toast.batchResult', {
+            count: response.result.updated?.length ?? 0,
+            action: t(resultKey[action]),
+          }),
           'success',
         );
         await server.refreshAll();
       };
       if (action === 'delete') {
         setConfirmRequest({
-          title: 'Delete this batch?',
-          body: 'All non-running job records in this batch will be removed.',
-          confirmLabel: 'Delete Batch',
+          title: t('confirm.deleteBatch.title'),
+          body: t('confirm.deleteBatch.body'),
+          confirmLabel: t('confirm.deleteBatch.action'),
           action: execute,
         });
       } else {
         void execute().catch((error) =>
-          showToast(error instanceof Error ? error.message : 'Batch action failed.', 'error'),
+          showToast(error instanceof Error ? error.message : t('toast.batchFailed'), 'error'),
         );
       }
     },
-    [server, showToast],
+    [server, showToast, t],
   );
 
   const submitBatch = useCallback(async () => {
     const selected = staged.filter((item) => item.selected);
     if (!selected.length) {
-      showToast('Select staged items.', 'error');
+      showToast(t('toast.selectStaged'), 'error');
       return;
     }
     setSubmitting(true);
@@ -397,7 +418,10 @@ export function App() {
       if (validation.invalid_count) {
         const first = validation.items.find((item) => !item.valid);
         showToast(
-          `${validation.invalid_count} file(s) failed validation${first?.message ? `: ${first.message}` : '.'}`,
+          t('toast.validationFailed', {
+            count: validation.invalid_count,
+            detail: first?.message ? `: ${first.message}` : '.',
+          }),
           'error',
         );
         return;
@@ -406,15 +430,15 @@ export function App() {
       setStaged((current) =>
         current.filter((item) => !selected.some((submitted) => submitted.id === item.id)),
       );
-      showToast(`${response.jobs.length} jobs queued successfully.`, 'success');
+      showToast(t('toast.jobsQueued', { count: response.jobs.length }), 'success');
       await server.refreshAll();
       navigate('/dashboard');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to create jobs.', 'error');
+      showToast(error instanceof Error ? error.message : t('toast.jobsCreateFailed'), 'error');
     } finally {
       setSubmitting(false);
     }
-  }, [navigate, server, settings, showToast, staged]);
+  }, [navigate, server, settings, showToast, staged, t]);
 
   const persistPresets = useCallback((next: LocalPreset[]) => {
     localStorage.setItem(presetStorageKey, JSON.stringify(next));
@@ -550,22 +574,26 @@ export function App() {
                 <Video size={16} />
               </div>
               <span className="font-semibold text-sm tracking-tight text-zinc-100 hidden-xs">
-                Video Converter
+                {t('app.name')}
               </span>
               <span className="brand-version hidden-xs">v{__APP_VERSION__}</span>
             </div>
             <nav className={`nav-tabs ${isMobileMenuOpen ? 'mobile-open' : ''}`}>
               <div className="mobile-nav-header">
-                <span className="font-semibold text-zinc-100">Menu</span>
-                <button className="btn-icon" onClick={() => setIsMobileMenuOpen(false)}>
+                <span className="font-semibold text-zinc-100">{t('nav.menu')}</span>
+                <button
+                  className="btn-icon"
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  aria-label={t('nav.close')}
+                >
                   <X size={18} />
                 </button>
               </div>
               {[
-                ['/dashboard', translate(language, 'dashboard')],
-                ['/convert', translate(language, 'convert')],
-                ['/presets', translate(language, 'presets')],
-                ['/settings', translate(language, 'settings')],
+                ['/dashboard', t('nav.dashboard')],
+                ['/convert', t('nav.convert')],
+                ['/presets', t('nav.presets')],
+                ['/settings', t('nav.settings')],
               ].map(([path, label]) => (
                 <Link
                   key={path}
@@ -585,7 +613,7 @@ export function App() {
               <button
                 className="mobile-overlay"
                 onClick={() => setIsMobileMenuOpen(false)}
-                aria-label="Close navigation"
+                aria-label={t('nav.close')}
               />
             )}
           </div>
@@ -594,34 +622,29 @@ export function App() {
               <HealthPill label="API" ok={server.apiHealthy} />
               <HealthPill label="Redis" ok={server.redisHealthy} />
               <HealthPill
-                label="Worker"
+                label={t('service.worker')}
                 ok={server.workerHealth?.status === 'ok'}
                 meta={
-                  server.workerHealth ? `${server.workerHealth.running_jobs} Active` : undefined
+                  server.workerHealth
+                    ? `${server.workerHealth.running_jobs} ${t('common.active')}`
+                    : undefined
                 }
               />
             </div>
             <button
               className="btn btn-outline"
               onClick={() =>
-                void server
-                  .refreshAll()
-                  .then(() => showToast('Data refreshed successfully.', 'success'))
+                void server.refreshAll().then(() => showToast(t('toast.refreshSuccess'), 'success'))
               }
               disabled={server.jobsRefreshing}
             >
               <RotateCw size={14} className={server.jobsRefreshing ? 'spin' : ''} />
-              <span className="hidden-xs">{translate(language, 'refresh')}</span>
+              <span className="hidden-xs">{t('common.refresh')}</span>
             </button>
             <button
               className="btn btn-outline"
-              onClick={() => {
-                const next = language === 'en' ? 'tr' : 'en';
-                localStorage.setItem('video-converter-language', next);
-                document.documentElement.lang = next;
-                setLanguage(next);
-              }}
-              aria-label="Change language"
+              onClick={toggleLanguage}
+              aria-label={t('nav.changeLanguage')}
             >
               {language.toUpperCase()}
             </button>
@@ -631,7 +654,7 @@ export function App() {
                 setAuthToken(null);
                 window.location.reload();
               }}
-              aria-label={translate(language, 'signOut')}
+              aria-label={t('nav.signOut')}
             >
               <LogOut size={14} />
             </button>
@@ -640,7 +663,7 @@ export function App() {
       </header>
 
       <main className="main-container">
-        <Suspense fallback={<div className="p-4 text-zinc-500">Loading page...</div>}>
+        <Suspense fallback={<div className="p-4 text-zinc-500">{t('loading.page')}</div>}>
           <Switch>
             <Route path="/dashboard">
               <DashboardPage />
@@ -667,11 +690,15 @@ export function App() {
       <footer className="app-footer">
         <div className="footer-container">
           <div className="footer-left">
-            <span>Last Sync: {server.lastSync ? formatDate(server.lastSync) : 'Never'}</span>
+            <span>
+              {t('footer.lastSync', {
+                value: server.lastSync ? formatDate(server.lastSync, language) : t('common.never'),
+              })}
+            </span>
             <span className="footer-sep">|</span>
             <span className="flex items-center gap-1">
               <span className={`status-dot ${server.streamState === 'live' ? 'ok' : 'error'}`} />
-              <span>{server.streamState === 'live' ? 'Live Stream Active' : 'Polling'}</span>
+              <span>{server.streamState === 'live' ? t('footer.live') : t('footer.polling')}</span>
             </span>
           </div>
           <span>v{__APP_VERSION__}</span>

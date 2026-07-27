@@ -1,10 +1,4 @@
-import type {
-  AudioExport,
-  ExportSettings,
-  JobStatus,
-  SubtitleExport,
-  VideoExport,
-} from '../models';
+import type { AudioExport, ExportSettings, SubtitleExport, VideoExport } from '../models';
 
 export const allowedExtensions = new Set([
   'mp4',
@@ -29,14 +23,6 @@ export type LocalPreset = {
   settings: ExportSettings;
   createdAt: string;
   updatedAt: string;
-};
-
-export const statusLabels: Record<JobStatus, string> = {
-  queued: 'Queued',
-  running: 'Running',
-  cancelled: 'Cancelled',
-  completed: 'Completed',
-  failed: 'Failed',
 };
 
 export const videoOptions: VideoExport[] = ['mp4', 'mkv', 'webm'];

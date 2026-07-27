@@ -2,53 +2,58 @@ import { Sliders, Trash2 } from 'lucide-react';
 import { useLocation } from 'wouter';
 
 import { useAppContext } from '../context/AppContext';
+import { useI18n } from '../i18n';
 import type { ExportSettings } from '../models';
-
-const choices = {
-  video_export: [
-    ['mp4', 'MP4 (H.264)'],
-    ['mkv', 'MKV (H.265)'],
-    ['webm', 'WebM (VP9)'],
-  ],
-  audio_export: [
-    ['copy', 'Copy Original'],
-    ['aac', 'AAC'],
-    ['mp3', 'MP3'],
-    ['opus', 'Opus'],
-  ],
-  subtitle_export: [
-    ['none', 'None'],
-    ['embedded', 'Embedded'],
-    ['separate_srt', 'Separate SRT'],
-  ],
-} as const;
 
 export default function PresetsPage() {
   const app = useAppContext();
+  const { t } = useI18n();
   const [, navigate] = useLocation();
+  const choices = {
+    video_export: [
+      ['mp4', 'MP4 (H.264)'],
+      ['mkv', 'MKV (H.265)'],
+      ['webm', 'WebM (VP9)'],
+    ],
+    audio_export: [
+      ['copy', t('convert.copyOriginal')],
+      ['aac', 'AAC'],
+      ['mp3', 'MP3'],
+      ['opus', 'Opus'],
+    ],
+    subtitle_export: [
+      ['none', t('common.none')],
+      ['embedded', t('convert.embedded')],
+      ['separate_srt', t('convert.separateSrt')],
+    ],
+  } as const;
 
   return (
     <div className="form-container">
       <div>
-        <h1 className="text-lg font-semibold tracking-tight text-zinc-50">Presets</h1>
-        <p className="text-xs text-zinc-400 mt-1">Manage your saved conversion profiles.</p>
+        <h1 className="text-lg font-semibold tracking-tight text-zinc-50">{t('presets.title')}</h1>
+        <p className="text-xs text-zinc-400 mt-1">{t('presets.subtitle')}</p>
       </div>
       <div className="form-panel mb-6">
         <span className="form-section-title border-b pb-2">
-          {app.editingPresetId ? 'Edit Preset' : 'Create Preset'}
+          {app.editingPresetId ? t('presets.edit') : t('presets.create')}
         </span>
         <div className="form-grid mt-4">
-          <TextField label="Name" value={app.presetName} onChange={app.setPresetName} />
           <TextField
-            label="Description"
+            label={t('presets.name')}
+            value={app.presetName}
+            onChange={app.setPresetName}
+          />
+          <TextField
+            label={t('presets.description')}
             value={app.presetDescription}
             onChange={app.setPresetDescription}
           />
         </div>
-        <span className="form-section-title border-b pb-2 mt-4">Export Options</span>
+        <span className="form-section-title border-b pb-2 mt-4">{t('presets.exportOptions')}</span>
         <div className="form-grid mt-4">
           <PresetSelect
-            label="Video Format"
+            label={t('convert.videoFormat')}
             value={app.presetSettings.video_export}
             options={choices.video_export}
             onChange={(value) =>
@@ -59,7 +64,7 @@ export default function PresetsPage() {
             }
           />
           <PresetSelect
-            label="Audio"
+            label={t('convert.audio')}
             value={app.presetSettings.audio_export}
             options={choices.audio_export}
             onChange={(value) =>
@@ -70,7 +75,7 @@ export default function PresetsPage() {
             }
           />
           <PresetSelect
-            label="Subtitles"
+            label={t('convert.subtitles')}
             value={app.presetSettings.subtitle_export}
             options={choices.subtitle_export}
             onChange={(value) =>
@@ -81,7 +86,7 @@ export default function PresetsPage() {
             }
           />
           <TextField
-            label="Language Preference"
+            label={t('convert.languagePreference')}
             value={app.presetSettings.subtitle_language}
             onChange={(subtitle_language) =>
               app.setPresetSettings((current) => ({ ...current, subtitle_language }))
@@ -90,17 +95,20 @@ export default function PresetsPage() {
         </div>
         <div className="pt-4 flex gap-2 justify-end">
           <button className="btn btn-outline" onClick={app.resetPresetForm}>
-            Clear Form
+            {t('presets.clearForm')}
           </button>
           <button
             className="btn btn-primary"
             disabled={!app.presetName.trim()}
             onClick={() => {
               app.savePreset();
-              app.showToast(app.editingPresetId ? 'Preset updated' : 'Preset saved', 'success');
+              app.showToast(
+                app.editingPresetId ? t('presets.updated') : t('presets.saved'),
+                'success',
+              );
             }}
           >
-            {app.editingPresetId ? 'Update Preset' : 'Save Preset'}
+            {app.editingPresetId ? t('presets.update') : t('presets.save')}
           </button>
         </div>
       </div>
@@ -110,11 +118,11 @@ export default function PresetsPage() {
           <div className="preset-card" key={preset.id}>
             <div className="preset-header">
               <span className="preset-badge">FFmpeg</span>
-              <span className="preset-type">Custom</span>
+              <span className="preset-type">{t('presets.custom')}</span>
             </div>
             <div className="preset-body">
               <h4>{preset.name}</h4>
-              <p>{preset.description || 'No description'}</p>
+              <p>{preset.description || t('presets.noDescription')}</p>
               <div className="text-xs text-zinc-500 mt-2 font-mono">
                 {preset.settings.video_export}/{preset.settings.audio_export}
               </div>
@@ -125,18 +133,18 @@ export default function PresetsPage() {
                 onClick={() => {
                   app.setSettings(preset.settings);
                   navigate('/convert');
-                  app.showToast(`Loaded preset ${preset.name}`, 'info');
+                  app.showToast(t('presets.loaded', { name: preset.name }), 'info');
                 }}
               >
-                Apply
+                {t('presets.apply')}
               </button>
               <button className="btn btn-outline" onClick={() => app.startEditPreset(preset)}>
-                Edit
+                {t('common.edit')}
               </button>
               <button
                 className="btn btn-danger"
                 onClick={() => app.deletePreset(preset.id)}
-                aria-label={`Delete preset ${preset.name}`}
+                aria-label={t('presets.deleteNamed', { name: preset.name })}
               >
                 <Trash2 size={14} />
               </button>
@@ -145,8 +153,8 @@ export default function PresetsPage() {
         ))}
         <button type="button" className="preset-card preset-new" onClick={app.resetPresetForm}>
           <Sliders size={24} className="text-zinc-500" />
-          <div className="text-sm font-medium text-zinc-300 mt-2">New Preset</div>
-          <div className="text-xs text-zinc-500 mt-1">Clear form to create a new preset.</div>
+          <div className="text-sm font-medium text-zinc-300 mt-2">{t('presets.new')}</div>
+          <div className="text-xs text-zinc-500 mt-1">{t('presets.newHelp')}</div>
         </button>
       </div>
     </div>

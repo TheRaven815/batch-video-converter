@@ -17,6 +17,7 @@ import type {
   SystemSettings,
   UploadResponse,
 } from './models';
+import { loadLanguage, translate } from './i18n';
 
 let authToken: string | null = localStorage.getItem('video-converter-auth-token');
 
@@ -71,7 +72,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const text = await response.text().catch(() => '');
     const message = extractErrorMessage(text);
-    throw new Error(message || `${init?.method || 'GET'} ${path} failed with ${response.status}`);
+    throw new Error(
+      message ||
+        translate(loadLanguage(), 'api.requestFailed', {
+          method: init?.method || 'GET',
+          status: response.status,
+        }),
+    );
   }
 
   if (response.status === 204) return undefined as T;
@@ -137,7 +144,12 @@ export async function listJobs(
       setAuthToken(null);
       window.location.reload();
     }
-    throw new Error(`GET /api/v1/jobs failed with ${response.status}`);
+    throw new Error(
+      translate(loadLanguage(), 'api.requestFailed', {
+        method: 'GET',
+        status: response.status,
+      }),
+    );
   }
   return {
     jobs: (await response.json()) as JobRecord[],
@@ -240,7 +252,10 @@ export async function downloadJobLog(jobId: string): Promise<void> {
   const headers = new Headers();
   if (authToken) headers.set('Authorization', `Bearer ${authToken}`);
   const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/log`, { headers });
-  if (!response.ok) throw new Error(`Log download failed with ${response.status}`);
+  if (!response.ok)
+    throw new Error(
+      translate(loadLanguage(), 'api.logDownloadFailed', { status: response.status }),
+    );
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -261,7 +276,7 @@ export async function downloadOutput(filename: string): Promise<void> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(`Download failed with ${response.status}`);
+    throw new Error(translate(loadLanguage(), 'api.downloadFailed', { status: response.status }));
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -302,7 +317,9 @@ export async function authLogin(username: string, password: string): Promise<str
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(extractErrorMessage(text) || 'Invalid username or password');
+    throw new Error(
+      extractErrorMessage(text) || translate(loadLanguage(), 'auth.invalidCredentials'),
+    );
   }
 
   const data = await response.json();

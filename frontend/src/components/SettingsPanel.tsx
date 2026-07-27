@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { updateCredentials, getSystemSettings, updateSystemSettings, setAuthToken } from '../api';
 import type { SystemSettings } from '../models';
 import { audioOptions, defaultSettings, subtitleOptions, videoOptions } from '../utils/constants';
+import { useI18n } from '../i18n';
 
 const defaultSystemSettings: SystemSettings = {
   worker_concurrency: 1,
@@ -38,6 +39,7 @@ export function SettingsPanel({
 }: {
   showToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }) {
+  const { t } = useI18n();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -54,7 +56,7 @@ export function SettingsPanel({
     onSuccess: (saved) => {
       queryClient.setQueryData(['server', 'settings'], saved);
       setSystemSettings(saved);
-      showToast('Settings updated successfully!', 'success');
+      showToast(t('settings.updated'), 'success');
       const theme =
         saved.ui.theme === 'system'
           ? window.matchMedia('(prefers-color-scheme: light)').matches
@@ -65,7 +67,7 @@ export function SettingsPanel({
       document.documentElement.dataset.density = saved.ui.density;
     },
     onError: (error) => {
-      showToast(error instanceof Error ? error.message : 'Update failed.', 'error');
+      showToast(error instanceof Error ? error.message : t('settings.updateFailed'), 'error');
     },
   });
   const settingsLoading = settingsQuery.isLoading || settingsMutation.isPending;
@@ -104,11 +106,11 @@ export function SettingsPanel({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentPassword) {
-      showToast('Please enter your current password to proceed.', 'error');
+      showToast(t('settings.currentPasswordRequired'), 'error');
       return;
     }
     if (!newUsername && !newPassword) {
-      showToast('Please enter a new username or a new password.', 'error');
+      showToast(t('settings.newCredentialRequired'), 'error');
       return;
     }
 
@@ -118,11 +120,11 @@ export function SettingsPanel({
       await updateCredentials(currentPassword, newUsername, newPassword);
       // Changing credentials revokes all previously issued tokens server-side,
       // so drop the local session and return to the login page.
-      showToast('Credentials updated. Please sign in again.', 'success');
+      showToast(t('settings.credentialsUpdated'), 'success');
       setAuthToken(null);
       window.location.reload();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Update failed.', 'error');
+      showToast(err instanceof Error ? err.message : t('settings.updateFailed'), 'error');
     } finally {
       setLoading(false);
     }
@@ -133,20 +135,17 @@ export function SettingsPanel({
       <form onSubmit={handleSettingsSubmit} className="settings-form">
         <div className="settings-toolbar">
           <div>
-            <span className="form-section-title">Conversion preferences</span>
-            <p className="settings-help">
-              Persist worker limits, export defaults, cleanup rules, and UI preferences.
-            </p>
+            <span className="form-section-title">{t('settings.conversionPreferences')}</span>
+            <p className="settings-help">{t('settings.preferencesHelp')}</p>
           </div>
           <button type="submit" className="btn btn-primary" disabled={settingsLoading}>
-            {settingsLoading ? 'Please wait...' : 'Save Settings'}
+            {settingsLoading ? t('settings.wait') : t('settings.save')}
           </button>
         </div>
 
         {settingsLoadError && (
           <div className="form-alert-error" role="alert">
-            Stored settings could not be loaded — the values below are defaults. Saving will
-            overwrite the stored settings.
+            {t('settings.loadFailed')}
           </div>
         )}
 
@@ -157,16 +156,16 @@ export function SettingsPanel({
           >
             <div className="settings-section-header">
               <span className="form-section-title" id="processing-settings-title">
-                Processing
+                {t('settings.processing')}
               </span>
               <span className="badge badge-running">
-                {systemSettings.worker_concurrency} active
+                {t('settings.activeCount', { count: systemSettings.worker_concurrency })}
               </span>
             </div>
             <div className="form-grid">
               <div className="form-group">
                 <label className="form-label" htmlFor="worker-concurrency">
-                  Parallel Conversions
+                  {t('settings.parallelConversions')}
                 </label>
                 <select
                   id="worker-concurrency"
@@ -179,17 +178,15 @@ export function SettingsPanel({
                 >
                   {[1, 2, 3, 4, 5, 6, 7, 8].map((num) => (
                     <option key={num} value={num}>
-                      {num} {num === 1 ? 'Job' : 'Jobs'} at a time
+                      {t('settings.jobsAtTime', { count: num })}
                     </option>
                   ))}
                 </select>
-                <p className="settings-help">
-                  For resource-constrained devices like Raspberry Pi, keep this at 1.
-                </p>
+                <p className="settings-help">{t('settings.concurrencyHelp')}</p>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-profile">
-                  Default Export Profile
+                  {t('settings.defaultProfile')}
                 </label>
                 <select
                   id="default-profile"
@@ -218,12 +215,12 @@ export function SettingsPanel({
             aria-labelledby="export-defaults-title"
           >
             <span className="form-section-title" id="export-defaults-title">
-              Export Defaults
+              {t('settings.exportDefaults')}
             </span>
             <div className="settings-fields four-columns">
               <div className="form-group">
                 <label className="form-label" htmlFor="default-container">
-                  Default Container
+                  {t('settings.defaultContainer')}
                 </label>
                 <select
                   id="default-container"
@@ -249,7 +246,7 @@ export function SettingsPanel({
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-audio">
-                  Default Audio
+                  {t('settings.defaultAudio')}
                 </label>
                 <select
                   id="default-audio"
@@ -268,14 +265,14 @@ export function SettingsPanel({
                 >
                   {audioOptions.map((option) => (
                     <option key={option} value={option}>
-                      {option}
+                      {option === 'copy' ? t('convert.copyOriginal') : option.toUpperCase()}
                     </option>
                   ))}
                 </select>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-subtitle-mode">
-                  Default Subtitle Mode
+                  {t('settings.defaultSubtitleMode')}
                 </label>
                 <select
                   id="default-subtitle-mode"
@@ -294,14 +291,18 @@ export function SettingsPanel({
                 >
                   {subtitleOptions.map((option) => (
                     <option key={option} value={option}>
-                      {option}
+                      {option === 'none'
+                        ? t('common.none')
+                        : option === 'embedded'
+                          ? t('convert.embedded')
+                          : t('convert.separateSrt')}
                     </option>
                   ))}
                 </select>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-subtitle-language">
-                  Default Subtitle Language
+                  {t('settings.defaultSubtitleLanguage')}
                 </label>
                 <input
                   id="default-subtitle-language"
@@ -316,7 +317,7 @@ export function SettingsPanel({
                     })
                   }
                   disabled={settingsLoading}
-                  placeholder="eng, tur, or blank"
+                  placeholder={t('settings.subtitleLanguageHint')}
                 />
               </div>
             </div>
@@ -324,12 +325,12 @@ export function SettingsPanel({
 
           <section className="settings-section" aria-labelledby="cleanup-settings-title">
             <span className="form-section-title" id="cleanup-settings-title">
-              Cleanup
+              {t('settings.cleanup')}
             </span>
             <label className="form-toggle-row settings-toggle-row" htmlFor="auto-cleanup-enabled">
               <span className="form-toggle-info">
-                <p>Enable automatic output cleanup</p>
-                <p>Remove old outputs while preserving a minimum number of files.</p>
+                <p>{t('settings.autoCleanup')}</p>
+                <p>{t('settings.autoCleanupHelp')}</p>
               </span>
               <input
                 id="auto-cleanup-enabled"
@@ -347,7 +348,7 @@ export function SettingsPanel({
             <div className="form-grid settings-mini-grid">
               <div className="form-group">
                 <label className="form-label" htmlFor="retention-days">
-                  Retention Days
+                  {t('settings.retentionDays')}
                 </label>
                 <input
                   id="retention-days"
@@ -369,7 +370,7 @@ export function SettingsPanel({
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="keep-minimum-outputs">
-                  Keep Minimum Outputs
+                  {t('settings.keepMinimumOutputs')}
                 </label>
                 <input
                   id="keep-minimum-outputs"
@@ -391,8 +392,8 @@ export function SettingsPanel({
               </div>
               <label className="form-toggle-row settings-toggle-row">
                 <span className="form-toggle-info">
-                  <p>Delete old terminal job records</p>
-                  <p>Completed, failed and cancelled records are pruned after retention.</p>
+                  <p>{t('settings.deleteTerminalJobs')}</p>
+                  <p>{t('settings.deleteTerminalJobsHelp')}</p>
                 </span>
                 <input
                   className="form-checkbox"
@@ -409,7 +410,7 @@ export function SettingsPanel({
                 />
               </label>
               <div className="form-group">
-                <label className="form-label">Job retention days</label>
+                <label className="form-label">{t('settings.jobRetentionDays')}</label>
                 <input
                   className="form-input"
                   type="number"
@@ -431,12 +432,12 @@ export function SettingsPanel({
 
           <section className="settings-section" aria-labelledby="retry-settings-title">
             <span className="form-section-title" id="retry-settings-title">
-              Retry & Safety
+              {t('settings.retrySafety')}
             </span>
             <label className="form-toggle-row settings-toggle-row">
               <span className="form-toggle-info">
-                <p>Retry transient FFmpeg failures</p>
-                <p>Uses exponential backoff and a bounded attempt count.</p>
+                <p>{t('settings.retryFfmpeg')}</p>
+                <p>{t('settings.retryHelp')}</p>
               </span>
               <input
                 className="form-checkbox"
@@ -454,7 +455,7 @@ export function SettingsPanel({
             </label>
             <div className="form-grid settings-mini-grid">
               <div className="form-group">
-                <label className="form-label">Maximum attempts</label>
+                <label className="form-label">{t('settings.maximumAttempts')}</label>
                 <input
                   className="form-input"
                   type="number"
@@ -472,7 +473,7 @@ export function SettingsPanel({
                 />
               </div>
               <div className="form-group">
-                <label className="form-label">Minimum free disk (MB)</label>
+                <label className="form-label">{t('settings.minimumDisk')}</label>
                 <input
                   className="form-input"
                   type="number"
@@ -494,11 +495,11 @@ export function SettingsPanel({
 
           <section className="settings-section" aria-labelledby="appearance-settings-title">
             <span className="form-section-title" id="appearance-settings-title">
-              Appearance
+              {t('settings.appearance')}
             </span>
             <div className="form-grid settings-mini-grid">
               <div className="form-group">
-                <label className="form-label">Theme</label>
+                <label className="form-label">{t('settings.theme')}</label>
                 <select
                   className="form-input"
                   value={systemSettings.ui.theme}
@@ -511,13 +512,13 @@ export function SettingsPanel({
                     })
                   }
                 >
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
-                  <option value="system">System</option>
+                  <option value="dark">{t('settings.themeDark')}</option>
+                  <option value="light">{t('settings.themeLight')}</option>
+                  <option value="system">{t('settings.themeSystem')}</option>
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">Density</label>
+                <label className="form-label">{t('settings.density')}</label>
                 <select
                   className="form-input"
                   value={systemSettings.ui.density}
@@ -530,8 +531,8 @@ export function SettingsPanel({
                     })
                   }
                 >
-                  <option value="comfortable">Comfortable</option>
-                  <option value="compact">Compact</option>
+                  <option value="comfortable">{t('settings.densityComfortable')}</option>
+                  <option value="compact">{t('settings.densityCompact')}</option>
                 </select>
               </div>
             </div>
@@ -542,10 +543,8 @@ export function SettingsPanel({
       <details className="settings-security-panel">
         <summary className="settings-summary">
           <span>
-            <span className="form-section-title">Security / Credentials</span>
-            <small className="settings-help">
-              Update username or password with your current password.
-            </small>
+            <span className="form-section-title">{t('settings.security')}</span>
+            <small className="settings-help">{t('settings.securityHelp')}</small>
           </span>
           <span className="settings-chevron">▼</span>
         </summary>
@@ -556,7 +555,7 @@ export function SettingsPanel({
         >
           <div className="form-group">
             <label className="form-label" htmlFor="current-password">
-              Current Password
+              {t('settings.currentPassword')}
             </label>
             <input
               id="current-password"
@@ -564,7 +563,7 @@ export function SettingsPanel({
               className="form-input"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
-              placeholder="Your current password"
+              placeholder={t('settings.currentPasswordHint')}
               disabled={loading}
               autoComplete="current-password"
               name="current-password"
@@ -572,7 +571,7 @@ export function SettingsPanel({
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="new-username">
-              New Username
+              {t('settings.newUsername')}
             </label>
             <input
               id="new-username"
@@ -580,7 +579,7 @@ export function SettingsPanel({
               className="form-input"
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              placeholder="Leave blank to keep current"
+              placeholder={t('settings.keepCurrentHint')}
               disabled={loading}
               autoComplete="off"
               name="new-username"
@@ -589,7 +588,7 @@ export function SettingsPanel({
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="new-password">
-              New Password
+              {t('settings.newPassword')}
             </label>
             <input
               id="new-password"
@@ -597,7 +596,7 @@ export function SettingsPanel({
               className="form-input"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Leave blank to keep current"
+              placeholder={t('settings.keepCurrentHint')}
               disabled={loading}
               autoComplete="new-password"
               name="new-password"
@@ -605,7 +604,7 @@ export function SettingsPanel({
           </div>
           <div className="settings-footer security-footer">
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Updating...' : 'Update Credentials'}
+              {loading ? t('settings.updating') : t('settings.updateCredentials')}
             </button>
           </div>
         </form>

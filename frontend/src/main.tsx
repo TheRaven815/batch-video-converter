@@ -7,6 +7,7 @@ import { useHashLocation } from 'wouter/use-hash-location';
 
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { I18nProvider } from './i18n';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,13 +30,15 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 
 createRoot(root).render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <Router hook={useHashLocation}>
-          <App />
-          <Toaster theme="dark" richColors closeButton position="top-right" />
-        </Router>
-      </QueryClientProvider>
-    </ErrorBoundary>
+    <I18nProvider>
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <Router hook={useHashLocation}>
+            <App />
+            <Toaster theme="dark" richColors closeButton position="top-right" />
+          </Router>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </I18nProvider>
   </React.StrictMode>,
 );

@@ -1,6 +1,22 @@
 import React from 'react';
+import { useI18n } from '../i18n';
 
 type State = { error: Error | null };
+
+function ErrorFallback() {
+  const { t } = useI18n();
+  return (
+    <main className="login-shell">
+      <section className="login-card" role="alert">
+        <h1 className="text-lg font-semibold text-zinc-50">{t('errorBoundary.title')}</h1>
+        <p className="text-sm text-zinc-400">{t('errorBoundary.body')}</p>
+        <button className="btn btn-primary" onClick={() => window.location.reload()}>
+          {t('errorBoundary.reload')}
+        </button>
+      </section>
+    </main>
+  );
+}
 
 export class ErrorBoundary extends React.Component<React.PropsWithChildren, State> {
   state: State = { error: null };
@@ -15,18 +31,6 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Stat
 
   render(): React.ReactNode {
     if (!this.state.error) return this.props.children;
-    return (
-      <main className="login-shell">
-        <section className="login-card" role="alert">
-          <h1 className="text-lg font-semibold text-zinc-50">Something went wrong</h1>
-          <p className="text-sm text-zinc-400">
-            The interface could not be rendered. Your queued jobs are still safe on the server.
-          </p>
-          <button className="btn btn-primary" onClick={() => window.location.reload()}>
-            Reload application
-          </button>
-        </section>
-      </main>
-    );
+    return <ErrorFallback />;
   }
 }

@@ -4,11 +4,13 @@ import { useLocation } from 'wouter';
 
 import { probeSubtitles, uploadMedia } from '../api';
 import { useAppContext } from '../context/AppContext';
+import { useI18n } from '../i18n';
 import type { ExportSettings, StagedServerFile } from '../models';
 import { uniqueLanguages } from '../utils/helpers';
 
 export default function ConvertPage() {
   const app = useAppContext();
+  const { t } = useI18n();
   const [, navigate] = useLocation();
   const selectedRoot = app.roots.find((root) => root.key === app.selectedRootKey);
   const selectedEntries = app.entries.filter(
@@ -28,7 +30,7 @@ export default function ConvertPage() {
           {
             id: `upload:${uploaded.input_filename}`,
             rootKey: '',
-            rootLabel: 'Upload',
+            rootLabel: t('convert.uploadRoot'),
             sourcePath: uploaded.input_filename,
             name: uploaded.input_filename,
             selected: true,
@@ -36,9 +38,9 @@ export default function ConvertPage() {
           },
         ]);
       }
-      app.showToast('Upload added to staging.', 'success');
+      app.showToast(t('convert.uploadAdded'), 'success');
     } catch (error) {
-      app.showToast(error instanceof Error ? error.message : 'Upload failed.', 'error');
+      app.showToast(error instanceof Error ? error.message : t('convert.uploadFailed'), 'error');
     } finally {
       setUploading(false);
     }
@@ -90,19 +92,17 @@ export default function ConvertPage() {
         );
     });
     app.setSelectedPaths(new Set());
-    app.showToast('Added to staging.', 'success');
+    app.showToast(t('convert.addedToStaging'), 'success');
   };
 
   return (
     <div className="form-container">
       <div>
-        <h1 className="text-lg font-semibold tracking-tight text-zinc-50">New Conversion</h1>
-        <p className="text-xs text-zinc-400 mt-1">
-          Select media files, choose encoding profile, and queue jobs.
-        </p>
+        <h1 className="text-lg font-semibold tracking-tight text-zinc-50">{t('convert.title')}</h1>
+        <p className="text-xs text-zinc-400 mt-1">{t('convert.subtitle')}</p>
       </div>
       <div className="form-panel">
-        <span className="form-section-title border-b pb-2">1. Source Browser</span>
+        <span className="form-section-title border-b pb-2">{t('convert.sourceBrowser')}</span>
         <label
           className="upload-dropzone"
           onDragOver={(event) => event.preventDefault()}
@@ -112,7 +112,7 @@ export default function ConvertPage() {
           }}
         >
           <Upload size={18} />
-          <span>{uploading ? 'Uploading…' : 'Drop video files here or click to upload'}</span>
+          <span>{uploading ? t('convert.uploading') : t('convert.upload')}</span>
           <input
             type="file"
             accept="video/*,.mkv,.m4v"
@@ -127,7 +127,7 @@ export default function ConvertPage() {
             className="form-input root-select"
             value={app.selectedRootKey}
             onChange={(event) => app.setSelectedRootKey(event.target.value)}
-            aria-label="Media root"
+            aria-label={t('convert.mediaRoot')}
           >
             {app.roots.length ? (
               app.roots.map((root) => (
@@ -136,13 +136,13 @@ export default function ConvertPage() {
                 </option>
               ))
             ) : (
-              <option value="">No roots</option>
+              <option value="">{t('convert.noRoots')}</option>
             )}
           </select>
           <div className="input-wrapper">
             <input
               className="form-input has-icon"
-              placeholder="Search files..."
+              placeholder={t('convert.searchFiles')}
               value={app.browserQuery}
               onChange={(event) => app.setBrowserQuery(event.target.value)}
               onKeyDown={(event) =>
@@ -155,13 +155,13 @@ export default function ConvertPage() {
             className="btn btn-outline"
             onClick={() => void app.openPath(app.currentPath, app.browserQuery)}
           >
-            Find
+            {t('convert.find')}
           </button>
         </div>
 
-        <div className="path-bar" aria-label="Current folder">
+        <div className="path-bar" aria-label={t('convert.currentFolder')}>
           <button className="path-btn" onClick={() => void app.openPath('', '')}>
-            Root
+            {t('convert.root')}
           </button>
           {app.currentPath
             .split('/')
@@ -185,7 +185,7 @@ export default function ConvertPage() {
 
         <div className="border border-zinc-800 rounded bg-zinc-950 max-h-64 overflow-y-auto">
           {app.browserLoading ? (
-            <div className="p-4 text-center text-zinc-500">Loading...</div>
+            <div className="p-4 text-center text-zinc-500">{t('convert.loading')}</div>
           ) : app.entries.length ? (
             app.entries.map((entry) => {
               const selected = app.selectedPaths.has(entry.rel_path);
@@ -225,7 +225,7 @@ export default function ConvertPage() {
               );
             })
           ) : (
-            <div className="p-4 text-center text-zinc-500">No media found.</div>
+            <div className="p-4 text-center text-zinc-500">{t('convert.noMedia')}</div>
           )}
         </div>
         <div className="flex justify-end mt-2">
@@ -234,14 +234,14 @@ export default function ConvertPage() {
             onClick={addSelected}
             disabled={!selectedEntries.length}
           >
-            Add Selected to Stage
+            {t('convert.addSelected')}
           </button>
         </div>
 
         {app.staged.length > 0 && (
           <>
             <span className="form-section-title border-b pb-2 mt-4">
-              2. Staged Files ({app.staged.length})
+              {t('convert.stagedFiles', { count: app.staged.length })}
             </span>
             <div className="border border-zinc-800 rounded bg-zinc-950 max-h-40 overflow-y-auto">
               {app.staged.map((item) => (
@@ -266,7 +266,7 @@ export default function ConvertPage() {
                     onClick={() =>
                       app.setStaged((current) => current.filter((staged) => staged.id !== item.id))
                     }
-                    aria-label={`Remove ${item.name} from staging`}
+                    aria-label={t('convert.removeStaged', { name: item.name })}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -276,10 +276,10 @@ export default function ConvertPage() {
           </>
         )}
 
-        <span className="form-section-title border-b pb-2 mt-4">3. Export Options</span>
+        <span className="form-section-title border-b pb-2 mt-4">{t('convert.exportOptions')}</span>
         <div className="form-grid">
           <ExportSelect
-            label="Video Format"
+            label={t('convert.videoFormat')}
             value={app.settings.video_export}
             onChange={(value) =>
               app.setSettings((current) => ({
@@ -294,7 +294,7 @@ export default function ConvertPage() {
             ]}
           />
           <ExportSelect
-            label="Audio"
+            label={t('convert.audio')}
             value={app.settings.audio_export}
             onChange={(value) =>
               app.setSettings((current) => ({
@@ -303,14 +303,14 @@ export default function ConvertPage() {
               }))
             }
             options={[
-              ['copy', 'Copy Original'],
+              ['copy', t('convert.copyOriginal')],
               ['aac', 'AAC'],
               ['mp3', 'MP3'],
               ['opus', 'Opus'],
             ]}
           />
           <ExportSelect
-            label="Subtitles"
+            label={t('convert.subtitles')}
             value={app.settings.subtitle_export}
             onChange={(value) =>
               app.setSettings((current) => ({
@@ -319,24 +319,24 @@ export default function ConvertPage() {
               }))
             }
             options={[
-              ['none', 'None'],
-              ['embedded', 'Embedded'],
-              ['separate_srt', 'Separate SRT'],
+              ['none', t('common.none')],
+              ['embedded', t('convert.embedded')],
+              ['separate_srt', t('convert.separateSrt')],
             ]}
           />
           <ExportSelect
-            label="Language Preference"
+            label={t('convert.languagePreference')}
             value={app.settings.subtitle_language}
             onChange={(value) =>
               app.setSettings((current) => ({ ...current, subtitle_language: value }))
             }
             options={[
-              ['', 'Auto Detect'],
+              ['', t('convert.autoDetect')],
               ...subtitleLanguages.map((language) => [language, language] as [string, string]),
             ]}
           />
           <ExportSelect
-            label="Resolution"
+            label={t('convert.resolution')}
             value={app.settings.resolution}
             onChange={(value) =>
               app.setSettings((current) => ({
@@ -345,14 +345,14 @@ export default function ConvertPage() {
               }))
             }
             options={[
-              ['original', 'Original'],
+              ['original', t('convert.original')],
               ['1080p', '1080p'],
               ['720p', '720p'],
               ['480p', '480p'],
             ]}
           />
           <ExportSelect
-            label="Encoder Preset"
+            label={t('convert.encoderPreset')}
             value={app.settings.encoder_preset}
             onChange={(value) =>
               app.setSettings((current) => ({
@@ -361,15 +361,15 @@ export default function ConvertPage() {
               }))
             }
             options={[
-              ['ultrafast', 'Ultra fast'],
-              ['veryfast', 'Very fast'],
-              ['fast', 'Fast'],
-              ['medium', 'Medium'],
-              ['slow', 'Slow'],
+              ['ultrafast', t('convert.ultraFast')],
+              ['veryfast', t('convert.veryFast')],
+              ['fast', t('convert.fast')],
+              ['medium', t('convert.medium')],
+              ['slow', t('convert.slow')],
             ]}
           />
           <div className="form-group">
-            <label className="form-label">Quality (CRF)</label>
+            <label className="form-label">{t('convert.quality')}</label>
             <input
               className="form-input"
               type="number"
@@ -385,10 +385,10 @@ export default function ConvertPage() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Video bitrate (optional)</label>
+            <label className="form-label">{t('convert.videoBitrate')}</label>
             <input
               className="form-input"
-              placeholder="e.g. 4M"
+              placeholder={t('convert.videoBitrateHint')}
               value={app.settings.target_video_bitrate}
               onChange={(event) =>
                 app.setSettings((current) => ({
@@ -399,7 +399,7 @@ export default function ConvertPage() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Audio bitrate (kbps)</label>
+            <label className="form-label">{t('convert.audioBitrate')}</label>
             <input
               className="form-input"
               type="number"
@@ -415,7 +415,7 @@ export default function ConvertPage() {
             />
           </div>
           <ExportSelect
-            label="Hardware Acceleration"
+            label={t('convert.hardwareAcceleration')}
             value={app.settings.hardware_acceleration}
             onChange={(value) =>
               app.setSettings((current) => ({
@@ -424,13 +424,13 @@ export default function ConvertPage() {
               }))
             }
             options={[
-              ['auto', 'Auto detect'],
-              ['disabled', 'Disabled'],
+              ['auto', t('convert.autoDetect')],
+              ['disabled', t('convert.disabled')],
               ['v4l2m2m', 'Raspberry Pi V4L2'],
             ]}
           />
           <div className="form-group">
-            <label className="form-label">Retry attempts</label>
+            <label className="form-label">{t('convert.retryAttempts')}</label>
             <input
               className="form-input"
               type="number"
@@ -446,22 +446,22 @@ export default function ConvertPage() {
             />
           </div>
           <ExportSelect
-            label="Queue Priority"
+            label={t('convert.queuePriority')}
             value={String(app.settings.priority)}
             onChange={(value) =>
               app.setSettings((current) => ({ ...current, priority: Number(value) }))
             }
             options={[
-              ['0', 'Normal'],
-              ['5', 'High'],
-              ['10', 'Urgent'],
-              ['-5', 'Low'],
+              ['0', t('convert.normal')],
+              ['5', t('convert.high')],
+              ['10', t('convert.urgent')],
+              ['-5', t('convert.low')],
             ]}
           />
         </div>
         <div className="border-t border-zinc-800 pt-4 flex items-center justify-end gap-2">
           <button className="btn btn-outline" onClick={() => navigate('/dashboard')}>
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             className="btn btn-primary"
@@ -469,7 +469,7 @@ export default function ConvertPage() {
             disabled={app.submitting || selectedStageCount === 0}
           >
             <Play size={14} />
-            <span>Queue {selectedStageCount} Jobs</span>
+            <span>{t('convert.queueJobs', { count: selectedStageCount })}</span>
           </button>
         </div>
       </div>

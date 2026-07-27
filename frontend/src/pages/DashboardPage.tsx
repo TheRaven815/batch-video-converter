@@ -11,9 +11,11 @@ import {
   SystemResourcesPanel,
 } from '../components/ui';
 import { useAppContext } from '../context/AppContext';
+import { useI18n } from '../i18n';
 
 export default function DashboardPage() {
   const app = useAppContext();
+  const { t } = useI18n();
   const [, navigate] = useLocation();
   const { jobId } = useParams();
   const detailJob = jobId ? (app.jobs.find((job) => job.id === jobId) ?? null) : null;
@@ -22,22 +24,24 @@ export default function DashboardPage() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight text-zinc-50">Dashboard</h1>
-          <p className="text-xs text-zinc-400">Monitor conversion queue and system metrics.</p>
+          <h1 className="text-lg font-semibold tracking-tight text-zinc-50">
+            {t('dashboard.title')}
+          </h1>
+          <p className="text-xs text-zinc-400">{t('dashboard.subtitle')}</p>
         </div>
         <button className="btn btn-primary" onClick={() => navigate('/convert')}>
           <Plus size={14} />
-          <span>New Job</span>
+          <span>{t('dashboard.newJob')}</span>
         </button>
       </div>
 
       <div className="metrics-grid">
         {[
-          ['Total Jobs', app.summary.all, 'active / done', ''],
-          ['Queued', app.summary.queued, 'waiting', 'queued'],
-          ['Running', app.summary.running, 'processing', 'running'],
-          ['Completed', app.summary.completed, 'success', 'done'],
-          ['Failed', app.summary.failed, 'errors', 'failed'],
+          [t('dashboard.totalJobs'), app.summary.all, t('dashboard.activeDone'), ''],
+          [t('dashboard.queued'), app.summary.queued, t('dashboard.waiting'), 'queued'],
+          [t('dashboard.running'), app.summary.running, t('dashboard.processing'), 'running'],
+          [t('dashboard.completed'), app.summary.completed, t('dashboard.success'), 'done'],
+          [t('dashboard.failed'), app.summary.failed, t('dashboard.errors'), 'failed'],
         ].map(([title, value, caption, className]) => (
           <div className={`metric-card ${className}`} key={title}>
             <span className="metric-title">{title}</span>
@@ -72,7 +76,7 @@ export default function DashboardPage() {
             />
             {app.hasNextJobs && (
               <button className="btn btn-outline load-more" onClick={app.loadMoreJobs}>
-                Load more jobs
+                {t('dashboard.loadMoreJobs')}
               </button>
             )}
           </div>
@@ -82,7 +86,7 @@ export default function DashboardPage() {
             outputs={app.outputs}
             onDownload={(filename) =>
               void downloadOutput(filename).catch(() =>
-                app.showToast(`Failed to download ${filename}.`, 'error'),
+                app.showToast(t('toast.downloadFailed', { filename }), 'error'),
               )
             }
             onClear={app.handleClearOutputs}
@@ -90,7 +94,7 @@ export default function DashboardPage() {
           />
           {app.hasNextOutputs && (
             <button className="btn btn-outline load-more" onClick={app.loadMoreOutputs}>
-              Load more outputs
+              {t('dashboard.loadMoreOutputs')}
             </button>
           )}
           <SystemResourcesPanel workerHealth={app.workerHealth} />
