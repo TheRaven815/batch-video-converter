@@ -18,7 +18,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg tini \
+    && apt-get install -y --no-install-recommends ffmpeg gosu tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 app \
     && mkdir -p /app-data \
@@ -38,8 +38,6 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8765
-
-USER app
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health/live', timeout=4)"]

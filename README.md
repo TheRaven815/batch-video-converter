@@ -230,7 +230,9 @@ Coolify/Portainer, VPS deployments, and Raspberry Pi:
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
 - `APP_DATA_SOURCE` can be a bind path such as `./data` or the `app-data`
   named volume. It is mounted at `/app-data` inside the container to avoid
-  conflicts with platform-managed `/data` storage.
+  conflicts with platform-managed `/data` storage. On startup, the container
+  prepares the runtime subdirectories and then runs the application as the
+  unprivileged `app` user.
 - Redis persistence uses the separate `redis-data` named volume.
 - All media mounts are read-only and their host paths are configured with
   `MEDIA_MOVIES_SOURCE`, `MEDIA_SERIES_SOURCE`, and

@@ -24,7 +24,7 @@ services:
     volumes:
       # APP_DATA_SOURCE accepts either a host path (./data) or the declared
       # app-data named volume, which is useful for Coolify/Portainer.
-      - ${APP_DATA_SOURCE:-./data}:/app-data
+      - ${APP_DATA_SOURCE:-./data}:/app-data:rw,z
       - ${MEDIA_MOVIES_SOURCE:-./media/movies}:/media/movies:ro
       - ${MEDIA_SERIES_SOURCE:-./media/series}:/media/series:ro
       - ${MEDIA_DOWNLOADS_SOURCE:-./media/downloads}:/media/downloads:ro

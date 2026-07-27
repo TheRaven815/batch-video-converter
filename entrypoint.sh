@@ -4,6 +4,25 @@
 
 set -e
 
+if [ "$(id -u)" = "0" ]; then
+    DATA_DIR="${DATA_ROOT:-/app-data}"
+    mkdir -p \
+        "$DATA_DIR" \
+        "$DATA_DIR/input" \
+        "$DATA_DIR/outputs" \
+        "$DATA_DIR/temp" \
+        "$DATA_DIR/logs" \
+        "$DATA_DIR/data"
+    chown app:app \
+        "$DATA_DIR" \
+        "$DATA_DIR/input" \
+        "$DATA_DIR/outputs" \
+        "$DATA_DIR/temp" \
+        "$DATA_DIR/logs" \
+        "$DATA_DIR/data"
+    exec gosu app "$0" "$@"
+fi
+
 echo "[entrypoint] Starting worker..."
 python -m video_converter.worker.main &
 WORKER_PID=$!
