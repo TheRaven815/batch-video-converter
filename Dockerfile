@@ -1,8 +1,11 @@
+# syntax=docker/dockerfile:1
+
 FROM node:22-slim AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline --no-audit --fund=false
 COPY frontend/ ./
 RUN npm run build
 
@@ -25,7 +28,8 @@ RUN apt-get update \
     && chown app:app /app-data
 
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --disable-pip-version-check -r /app/requirements.txt
 
 COPY src /app/src
 

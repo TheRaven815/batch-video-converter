@@ -1824,6 +1824,7 @@ select.form-input {
 @media (max-width: 768px) {
   :root {
     --mobile-nav-height: 4.25rem;
+    --mobile-action-height: 4.25rem;
   }
 
   html {
@@ -2231,6 +2232,10 @@ select.form-input {
     gap: 0.875rem;
   }
 
+  .convert-page .form-panel {
+    padding-bottom: calc(var(--mobile-action-height) + 1rem);
+  }
+
   .form-grid {
     gap: 0.875rem;
   }
@@ -2297,13 +2302,18 @@ select.form-input {
   }
 
   .convert-actions {
-    position: sticky;
+    position: fixed;
+    right: 0;
+    left: 0;
     bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));
-    z-index: 10;
-    margin: 0 -0.875rem -0.875rem;
-    padding: 0.75rem 0.875rem !important;
-    background: color-mix(in srgb, var(--zinc-900) 94%, transparent);
-    border-radius: 0 0 0.75rem 0.75rem;
+    z-index: 70;
+    min-height: var(--mobile-action-height);
+    margin: 0;
+    padding: 0.75rem max(0.875rem, env(safe-area-inset-right)) 0.75rem
+      max(0.875rem, env(safe-area-inset-left)) !important;
+    background: color-mix(in srgb, var(--zinc-950) 96%, transparent);
+    border-radius: 0;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.18);
     backdrop-filter: blur(14px);
   }
 
@@ -2477,10 +2487,17 @@ select.form-input {
   }
 
   [data-sonner-toaster] {
-    width: calc(100% - 1.5rem) !important;
+    width: min(22rem, calc(100% - 1.5rem)) !important;
     right: 0.75rem !important;
-    left: 0.75rem !important;
+    left: auto !important;
     bottom: calc(var(--mobile-nav-height) + 0.75rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  body:has(.convert-actions) [data-sonner-toaster] {
+    bottom: calc(
+      var(--mobile-nav-height) + var(--mobile-action-height) + 0.75rem +
+        env(safe-area-inset-bottom)
+    ) !important;
   }
 }
 
@@ -2885,4 +2902,47 @@ select.form-input {
   .metrics-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+
+/* Angular visual treatment
+ *
+ * Keep the responsive workspace layout introduced by the recent desktop and
+ * mobile refinements, but restore the compact 4px corners used by the original
+ * interface. Circular status indicators, progress tracks, and pill badges keep
+ * their semantic shapes.
+ */
+.brand-icon,
+.brand-version,
+.mobile-menu-btn,
+.header-action,
+.nav-tab,
+.btn,
+.btn-icon,
+.output-btn,
+.metric-card,
+.panel,
+.sidebar-panel,
+.form-panel,
+.preset-card,
+.settings-security-panel,
+.settings-section,
+.settings-toggle-row,
+.form-input,
+.path-bar,
+.path-btn,
+.upload-dropzone,
+.data-table tbody tr,
+.output-item,
+.output-thumbnail,
+.batch-card,
+.resource-item,
+.modal-card,
+.detail-drawer,
+.detail-header,
+.login-card,
+.toast,
+.log-box,
+.telemetry-chart,
+.rounded {
+  border-radius: 0.25rem;
 }

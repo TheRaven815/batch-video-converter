@@ -239,6 +239,13 @@ Coolify/Portainer, VPS deployments, and Raspberry Pi:
   `MEDIA_DOWNLOADS_SOURCE`.
 - The app healthcheck uses `/health/ready`, and Compose allows up to ten minutes
   for active FFmpeg work to drain during shutdown.
+- Startup healthchecks use short, broadly compatible intervals so Redis and the
+  app can become healthy quickly without requiring Docker 25's `start_interval`.
+- Docker BuildKit keeps separate npm and pip download caches. Unchanged
+  dependency layers are reused normally; when a lockfile or requirements file
+  changes, unchanged packages do not need to be downloaded again. Coolify uses
+  BuildKit; if an older local Docker installation reports that `--mount`
+  requires BuildKit, run the build with `DOCKER_BUILDKIT=1`.
 
 Copy `.env.example` to `.env`, customize it, and always start the same file:
 
@@ -268,6 +275,11 @@ Recommended Coolify settings:
 - Public service: `app`.
 - Container port: `8765`.
 - Healthcheck path: `/health/ready`.
+
+In Coolify's advanced build settings, leave `Include Source Commit in Build`
+disabled and avoid forced/no-cache rebuilds unless troubleshooting. Including a
+different commit hash in every build invalidates otherwise reusable Docker
+layers.
 
 Recommended Coolify variables include `APP_DATA_SOURCE=app-data`,
 `APP_PORT=8765`, and host paths for the three `MEDIA_*_SOURCE` variables.

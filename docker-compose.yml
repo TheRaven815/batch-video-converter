@@ -43,8 +43,10 @@ services:
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health/ready', timeout=5)",
         ]
-      interval: 30s
-      timeout: 10s
+      # Keep startup detection quick without requiring Docker 25's
+      # start_interval, so older Raspberry Pi Docker engines remain supported.
+      interval: 10s
+      timeout: 5s
       retries: 5
       start_period: 30s
     stop_grace_period: 10m
@@ -66,7 +68,8 @@ services:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      # The app waits for this check before it is created.
+      interval: 3s
       timeout: 3s
       retries: 5
     deploy:

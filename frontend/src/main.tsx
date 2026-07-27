@@ -35,7 +35,7 @@ createRoot(root).render(
         <QueryClientProvider client={queryClient}>
           <Router hook={useHashLocation}>
             <App />
-            <Toaster theme="dark" richColors closeButton position="top-right" />
+            <Toaster theme="dark" richColors closeButton position="bottom-right" />
           </Router>
         </QueryClientProvider>
       </ErrorBoundary>
