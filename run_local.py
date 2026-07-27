@@ -45,7 +45,9 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument(
         "--worker-only", action="store_true", help="Start only the Redis/FFmpeg worker."
     )
-    parser.add_argument("--host", default="0.0.0.0", help="API host bind address. Default: 0.0.0.0")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="API host bind address. Default: 127.0.0.1"
+    )
     parser.add_argument("--port", type=int, default=8765, help="API port. Default: 8765")
     parser.add_argument(
         "--no-browser", action="store_true", help="Do not open the local UI in a browser."
@@ -60,6 +62,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-redis-check",
         action="store_true",
         help="Skip the Redis ping check before launching child processes when --storage redis is used.",
+    )
+    parser.add_argument(
+        "--rebuild-frontend",
+        action="store_true",
+        help="Force npm ci and a fresh production frontend build.",
     )
     return parser.parse_args()
 
@@ -215,18 +222,54 @@ def warn_for_missing_binaries(names: Iterable[str]) -> None:
     print("          Install FFmpeg and add its bin directory to PATH, then restart this terminal.")
 
 
-def build_frontend() -> None:
+def _frontend_build_is_fresh(frontend_dir: Path) -> bool:
+    output = frontend_dir / "dist" / "index.html"
+    if not output.exists():
+        return False
+
+    source_paths = [
+        frontend_dir / "index.html",
+        frontend_dir / "package.json",
+        frontend_dir / "package-lock.json",
+        frontend_dir / "tsconfig.json",
+        frontend_dir / "vite.config.ts",
+        *list((frontend_dir / "src").rglob("*")),
+        *list((frontend_dir / "public").rglob("*")),
+    ]
+    output_mtime = output.stat().st_mtime
+    return all(not path.is_file() or path.stat().st_mtime <= output_mtime for path in source_paths)
+
+
+def build_frontend(*, force: bool = False) -> None:
     frontend_dir = PROJECT_ROOT / "frontend"
-    npm_executable = shutil.which("npm.cmd" if os.name == "nt" else "npm") or shutil.which("npm")
+    if not force and _frontend_build_is_fresh(frontend_dir):
+        print("[ok] Frontend build is up to date; skipping npm commands.")
+        return
+
+    bundled_npm = PROJECT_ROOT / ".tools" / "node" / ("npm.cmd" if os.name == "nt" else "bin/npm")
+    npm_executable = (
+        shutil.which("npm.cmd" if os.name == "nt" else "npm")
+        or shutil.which("npm")
+        or (str(bundled_npm) if bundled_npm.is_file() else None)
+    )
     if npm_executable is None:
         raise LauncherError(
             "npm was not found on PATH. Install Node.js/npm before running the local launcher."
         )
 
-    commands = [
-        [npm_executable, "ci"],
-        [npm_executable, "run", "build"],
-    ]
+    install_marker = frontend_dir / "node_modules" / ".package-lock.json"
+    lock_file = frontend_dir / "package-lock.json"
+    dependencies_are_current = (
+        install_marker.exists()
+        and lock_file.exists()
+        and install_marker.stat().st_mtime >= lock_file.stat().st_mtime
+    )
+    commands = []
+    if force or not dependencies_are_current:
+        commands.append([npm_executable, "ci"])
+    else:
+        print("[ok] Frontend dependencies are up to date; skipping npm ci.")
+    commands.append([npm_executable, "run", "build"])
     for command in commands:
         display_command = " ".join(["npm", *command[1:]])
         print(f"[build] Frontend: {display_command}")
@@ -356,6 +399,11 @@ def print_configuration(args: argparse.Namespace) -> None:
         print("[config] REDIS_URL=" + os.environ["REDIS_URL"])
     print("[config] DATA_ROOT=" + os.environ["DATA_ROOT"])
     print("[config] MEDIA_MOUNTS=" + os.environ["MEDIA_MOUNTS"])
+    if not os.environ.get("APP_PASSWORD"):
+        print(
+            "[config] APP_PASSWORD is not set: the UI will show a one-time setup screen "
+            "to create the admin account on first run."
+        )
     if not args.worker_only:
         print(f"[config] UI URL=http://localhost:{args.port}/")
 
@@ -378,7 +426,8 @@ def main() -> int:
     os.environ["VIDEO_CONVERTER_STORAGE"] = os.environ["VIDEO_CONVERTER_STORAGE"].strip().lower()
 
     try:
-        build_frontend()
+        if not args.worker_only:
+            build_frontend(force=args.rebuild_frontend)
         create_runtime_directories()
         check_python_packages()
         warn_for_missing_binaries(["ffmpeg", "ffprobe"])

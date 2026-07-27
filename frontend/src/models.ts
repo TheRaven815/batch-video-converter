@@ -1,168 +1,60 @@
-export type JobStatus = 'queued' | 'running' | 'cancelled' | 'completed' | 'failed';
+import type { components } from './generated/api-schema';
 
-export type VideoExport = 'mp4' | 'mkv' | 'webm';
-export type AudioExport = 'copy' | 'aac' | 'mp3' | 'opus';
-export type SubtitleExport = 'none' | 'embedded' | 'separate_srt';
+type Schemas = components['schemas'];
 
-export interface HealthResponse {
-  status: string;
-  redis: string;
-}
-
-export interface WorkerHealthResponse {
-  status: string;
-  redis: string;
-  queue_depth: number;
-  running_jobs: number;
-  cpu_percent: number;
-  checked_at: string;
-}
-
-export interface JobCreateRequest {
-  input_filename?: string | null;
-  source_root_key?: string | null;
-  source_path?: string | null;
-  profile: string;
-  video_export: VideoExport;
-  audio_export: AudioExport;
-  subtitle_export: SubtitleExport;
-  subtitle_language?: string | null;
-}
-
-export interface JobRecord extends JobCreateRequest {
-  id: string;
-  status: JobStatus;
-  output_filename?: string | null;
-  error_message?: string | null;
-  progress_percent?: number | null;
-  progress_phase?: string | null;
-  progress_message?: string | null;
-  progress_updated_at?: string | null;
-  progress_eta_seconds?: number | null;
-  progress_fps?: number | null;
-  progress_speed?: string | null;
-  progress_bitrate?: string | null;
-  progress_out_time_seconds?: number | null;
-  log_tail: string[];
-  timeline: Array<{ at?: string; status?: JobStatus; phase?: string; message?: string | null }>;
-  archived: boolean;
-  cancel_requested: boolean;
-  created_at: string;
-  updated_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-  batch_id?: string | null;
-  attempt_count: number;
-}
-
-export interface JobBatchCreateResponse {
-  jobs: JobRecord[];
-  idempotency_key?: string | null;
-}
-
-export interface JobValidationItem {
-  index: number;
-  valid: boolean;
-  input_filename?: string | null;
-  source_root_key?: string | null;
-  source_path?: string | null;
-  error_code?: string | null;
-  message?: string | null;
-  recoverable: boolean;
-}
-
-export interface JobValidationResponse {
-  items: JobValidationItem[];
-  valid_count: number;
-  invalid_count: number;
-}
-
-export interface BatchSummaryDto {
-  batch_id: string;
-  total: number;
-  queued: number;
-  running: number;
-  cancelled: number;
-  completed: number;
-  failed: number;
-  progress_percent: number;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface BatchListResponse {
-  batches: BatchSummaryDto[];
-  next_cursor?: string | null;
-}
-
-export interface ErrorEnvelope {
-  code: string;
-  message: string;
-  recoverable: boolean;
+export type JobStatus = Schemas['JobStatus'];
+export type ExportProfile = Schemas['ExportProfile'];
+export type VideoExport = Schemas['VideoExport'];
+export type AudioExport = Schemas['AudioExport'];
+export type SubtitleExport = Schemas['SubtitleExport'];
+export type HealthResponse = Schemas['HealthResponse'];
+export type WorkerHealthResponse = Schemas['WorkerHealthResponse'];
+export type JobCreateRequest = Schemas['JobCreateRequest'];
+export type JobBatchCreateResponse = Schemas['JobBatchCreateResponse'];
+export type JobValidationItem = Schemas['JobValidationItem'];
+export type JobValidationResponse = Schemas['JobValidationResponse'];
+export type BatchSummaryDto = Schemas['BatchSummaryDto'];
+export type BatchListResponse = Schemas['BatchListResponse'];
+export type ErrorEnvelope = Omit<Schemas['ErrorEnvelope'], 'details'> & {
   details?: Record<string, unknown> | null;
-}
-
-export interface StructuredErrorResponse {
+};
+export type StructuredErrorResponse = Omit<Schemas['StructuredErrorResponse'], 'error'> & {
   error: ErrorEnvelope;
-}
-
-export interface JobStreamPayload {
-  event: 'jobs_snapshot' | 'heartbeat' | string;
-  timestamp: string;
-  data: { jobs?: JobRecord[] };
-}
-
-export interface JobActionSkip {
-  job_id: string;
-  reason: string;
-}
-
-export interface JobBulkActionResponse {
+};
+export type JobActionSkip = Schemas['JobActionSkip'];
+export type JobBulkActionResponse = Omit<
+  Schemas['JobBulkActionResponse'],
+  'updated' | 'skipped'
+> & {
   updated: JobRecord[];
   skipped: JobActionSkip[];
-}
-
-export interface MediaRootDto {
-  key: string;
-  label: string;
-}
-
-export interface MediaBrowseEntryDto {
+};
+export type MediaRootDto = Schemas['MediaRootDto'];
+export type MediaBrowseEntryDto = Omit<Schemas['MediaBrowseEntryDto'], 'type'> & {
   type: 'dir' | 'file';
-  name: string;
-  rel_path: string;
-}
-
-export interface MediaBrowseResponse {
-  root_key: string;
-  current_path: string;
+};
+export type MediaBrowseResponse = Omit<Schemas['MediaBrowseResponse'], 'entries'> & {
   entries: MediaBrowseEntryDto[];
-  next_cursor?: string | null;
-}
+};
+export type MediaSubtitleTrackDto = Schemas['MediaSubtitleTrackDto'];
+export type MediaSubtitleProbeResponse = Schemas['MediaSubtitleProbeResponse'];
+export type OutputFileDto = Schemas['OutputFileDto'];
+export type OutputListResponse = Schemas['OutputListResponse'];
 
-export interface MediaSubtitleTrackDto {
-  index: number;
-  language: string;
-  title?: string | null;
-  codec_name?: string | null;
-}
+type ApiJobRecord = Schemas['JobRecord'];
+export type JobRecord = Omit<ApiJobRecord, 'timeline'> & {
+  timeline?: Array<{
+    at?: string;
+    status?: JobStatus;
+    phase?: string;
+    message?: string | null;
+  }>;
+};
 
-export interface MediaSubtitleProbeResponse {
-  root_key: string;
-  path: string;
-  tracks: MediaSubtitleTrackDto[];
-}
-
-export interface OutputFileDto {
-  filename: string;
-  size_bytes: number;
-  modified_at: string;
-  download_url: string;
-}
-
-export interface OutputListResponse {
-  outputs: OutputFileDto[];
-  next_cursor?: string | null;
+export interface JobStreamPayload {
+  event: 'jobs_snapshot' | 'job_updated' | 'job_deleted' | 'heartbeat' | string;
+  timestamp: string;
+  data: { jobs?: JobRecord[]; job?: JobRecord; job_id?: string };
 }
 
 export interface StagedServerFile {
@@ -194,29 +86,17 @@ export interface JobFilters {
 
 export type UiTheme = 'dark' | 'light' | 'system';
 export type UiDensity = 'comfortable' | 'compact';
-
-export interface DefaultExportSettings {
-  profile: string;
-  video_export: VideoExport;
-  audio_export: AudioExport;
-  subtitle_export: SubtitleExport;
-  subtitle_language: string | null;
-}
-
-export interface AutoCleanupSettings {
-  enabled: boolean;
-  retention_days: number;
-  keep_minimum_outputs: number;
-}
-
-export interface UiPreferences {
+export type DefaultExportSettings = Schemas['DefaultExportSettings'];
+export type AutoCleanupSettings = Schemas['AutoCleanupSettings'];
+export type UiPreferences = Omit<Schemas['UiPreferences'], 'theme' | 'density'> & {
   theme: UiTheme;
   density: UiDensity;
-}
-
-export interface SystemSettings {
-  worker_concurrency: number;
+};
+export type SystemSettings = Omit<
+  Schemas['SystemSettings-Output'],
+  'default_export' | 'auto_cleanup' | 'ui'
+> & {
   default_export: DefaultExportSettings;
   auto_cleanup: AutoCleanupSettings;
   ui: UiPreferences;
-}
+};

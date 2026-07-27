@@ -158,7 +158,13 @@ python run_local.py --host 127.0.0.1 --port 8765
 python run_local.py --no-browser
 python run_local.py --storage redis
 python run_local.py --skip-redis-check
+python run_local.py --rebuild-frontend
 ```
+
+The launcher binds to `127.0.0.1` by default. It skips `npm ci` when installed
+dependencies match the lockfile and skips the frontend build when `dist/` is
+newer than its sources. `--worker-only` never runs npm; use
+`--rebuild-frontend` to force a clean install and build.
 
 Default local settings used by `run_local.py` when environment variables are not set:
 
@@ -204,7 +210,8 @@ npm run build
 - `frontend-builder`: installs frontend dependencies and runs `npm run build`.
 - `backend-final`: installs FFmpeg, Python dependencies, copies `src/`, and copies only `frontend/dist/` into the final image.
 
-The final image defaults include:
+The final image runs as an unprivileged `app` user under `tini`, includes an
+OCI healthcheck, and defaults to:
 
 ```env
 PYTHONPATH=/app/src
@@ -217,16 +224,18 @@ MEDIA_MOUNTS=Media=/data/input
 
 `docker-compose.yml` is intended for local development:
 
-- `api` runs `uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8765`.
-- `worker` runs `python -m video_converter.worker.main`.
+- `app` supervises Uvicorn and the Python worker through `entrypoint.sh`.
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
-- `./data` is mounted to `${DATA_ROOT:-/data}` for API and worker.
-- Example media mounts are read-only: `./media/Movies:/media/Movies:ro` and `./media/Series:/media/Series:ro`.
+- `./data` is always mounted to the container path `/data`.
+- Redis persistence uses the separate `redis-data` named volume.
+- Example media mounts are read-only: `./media/movies:/media/movies:ro` and `./media/series:/media/series:ro`.
+- The app healthcheck uses `/health/ready`, and Compose allows up to ten minutes
+  for active FFmpeg work to drain during shutdown.
 
 When adding media roots, update both places together:
 
 1. Add `Label=/container/path` to `MEDIA_MOUNTS` in `.env`.
-2. Add the matching `:ro` volume line to both `api` and `worker` services.
+2. Add the matching `:ro` volume line to the `app` service.
 
 ### Coolify
 
@@ -263,9 +272,10 @@ If you use a domain or Coolify reverse proxy and do not want a direct host port,
 | `DATA_ROOT` | `/data` | Writable application root. The app creates `input`, `outputs`, `temp`, `logs`, and `data` under it. |
 | `MEDIA_MOUNTS` | `Label=/container/path;Label2=/container/path2` | Read-only media roots shown in the UI. If empty, the app falls back to `DATA_ROOT/input`. |
 | `WORKER_CONCURRENCY` | `1` | Number of jobs processed concurrently by the worker. Increase only when CPU/RAM/IO capacity is sufficient. |
-| `APP_USERNAME` | `admin` | Username for accessing the web UI and API. |
-| `APP_PASSWORD` | `12345678` | Password for accessing the web UI and API. |
-| `JWT_SECRET` | *(Random)* | Secret key used to sign JWT authentication tokens. Generates randomly on startup if not set. |
+| `FFMPEG_THREADS` | `1` | Maximum encoder threads per FFmpeg process (1–32). Approximate CPU pressure is `WORKER_CONCURRENCY × FFMPEG_THREADS`. |
+| `APP_USERNAME` | `admin` | Username for accessing the web UI and API (only used together with `APP_PASSWORD`). |
+| `APP_PASSWORD` | *(unset)* | Optional pre-provisioned password. There is no default: if unset, the UI shows a one-time first-run setup screen to create the admin account. |
+| `JWT_SECRET` | *(auto-generated)* | Secret key used to sign JWT authentication tokens. If not set, a secret is generated once and persisted under `DATA_ROOT/data/jwt_secret`. |
 
 Important rules:
 
@@ -364,7 +374,7 @@ Supported source video extensions are `mp4`, `mov`, `mkv`, `avi`, `webm`, `m4v`,
 ## Frontend Usage
 
 1. Open `http://localhost:8765/` for the built UI or the Vite dev URL during frontend development.
-2. Log in using the configured `APP_USERNAME` and `APP_PASSWORD` (defaults to `admin` / `12345678`).
+2. On first run, create the admin account in the setup screen (or log in with the pre-provisioned `APP_USERNAME` / `APP_PASSWORD` if set — there are no default credentials).
 3. Use the media browser to select files from configured server roots.
 4. Add selected files to the staging list and remove or select entries as needed.
 5. Choose export settings:

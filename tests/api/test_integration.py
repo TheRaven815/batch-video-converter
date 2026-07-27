@@ -29,6 +29,14 @@ class _Pipeline:
         self.commands.append(("lrem", (key, count, value)))
         return self
 
+    def sadd(self, key: str, *values: str) -> "_Pipeline":
+        self.commands.append(("sadd", (key, *values)))
+        return self
+
+    def srem(self, key: str, *values: str) -> "_Pipeline":
+        self.commands.append(("srem", (key, *values)))
+        return self
+
     def delete(self, key: str) -> "_Pipeline":
         self.commands.append(("delete", (key,)))
         return self
@@ -44,6 +52,8 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.lists: dict[str, list[str]] = {QUEUE_NAME: [], JOBS_INDEX_KEY: []}
+        self.sets: dict[str, set[str]] = {}
+        self.published: list[tuple[str, str]] = []
         self.ping_raises = False
 
     def ping(self) -> bool:
@@ -92,6 +102,25 @@ class _FakeRedis:
             selected = set(list(reversed(indexes))[: abs(count)])
         self.lists[key] = [item for index, item in enumerate(values) if index not in selected]
         return len(selected)
+
+    def sadd(self, key: str, *values: str) -> int:
+        target = self.sets.setdefault(key, set())
+        before = len(target)
+        target.update(values)
+        return len(target) - before
+
+    def srem(self, key: str, *values: str) -> int:
+        target = self.sets.setdefault(key, set())
+        before = len(target)
+        target.difference_update(values)
+        return before - len(target)
+
+    def scard(self, key: str) -> int:
+        return len(self.sets.get(key, set()))
+
+    def publish(self, channel: str, message: str) -> int:
+        self.published.append((channel, message))
+        return 0
 
     def delete(self, key: str) -> int:
         existed = key in self.values
@@ -279,7 +308,7 @@ def test_job_creation_get_and_list_flow(
         json={"source_root_key": "root", "source_path": "movie.mp4", "profile": "h264_mp4"},
     )
 
-    assert create_response.status_code == 200
+    assert create_response.status_code == 201
     created = create_response.json()
     assert created["status"] == "queued"
     assert created["input_filename"] == "movie.mp4"
@@ -315,7 +344,7 @@ def test_batch_job_creation_returns_valid_jobs_and_partial_failures(
         headers={"Idempotency-Key": "mixed-batch"},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 201
     payload = response.json()
     assert len(payload["jobs"]) == 1
     assert payload["jobs"][0]["source_path"] == "valid.mp4"
@@ -331,7 +360,7 @@ def test_batch_job_creation_returns_valid_jobs_and_partial_failures(
         json={"jobs": [{"source_root_key": "root", "source_path": "valid.mp4"}]},
         headers={"Idempotency-Key": "mixed-batch"},
     )
-    assert cached_response.status_code == 200
+    assert cached_response.status_code == 201
     assert cached_response.json()["jobs"][0]["id"] == payload["jobs"][0]["id"]
     assert fake_redis.lists[QUEUE_NAME] == [payload["jobs"][0]["id"]]
 

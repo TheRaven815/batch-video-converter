@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 @dataclass(frozen=True)
@@ -15,24 +18,86 @@ class MediaRoot:
 
 
 QUEUE_NAME = "jobs:queue"
+PROCESSING_QUEUE_NAME = "jobs:processing"
 JOB_KEY_PREFIX = "job:"
 JOBS_INDEX_KEY = "jobs:index"
+JOB_EVENTS_CHANNEL = "jobs:events"
 
 
-@dataclass(frozen=True)
-class Settings:
-    redis_url: str
-    data_root: Path
-    input_dir: Path
-    outputs_dir: Path
-    temp_dir: Path
-    logs_dir: Path
-    data_dir: Path
-    media_roots: tuple[MediaRoot, ...]
-    worker_concurrency: int = 1
+class Settings(BaseSettings):
+    """Environment-backed application settings.
+
+    Derived directories deliberately live here so their defaults cannot drift
+    between the API, worker and launch scripts.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        frozen=True,
+    )
+
+    redis_url: str = "redis://redis:6379/0"
+    video_converter_storage: Literal["redis", "local"] = "redis"
+    data_root: Path = Path("/data")
+    media_mounts: str = ""
+    worker_concurrency: int = Field(default=1, ge=1)
+    ffmpeg_threads: int = Field(default=1, ge=1, le=32)
     app_username: str = "admin"
-    app_password: str = "12345678"
+    app_password: str = ""
     jwt_secret: str = ""
+
+    @field_validator("video_converter_storage", mode="before")
+    @classmethod
+    def _normalize_storage_backend(cls, value: object) -> str:
+        normalized = str(value or "redis").strip().lower()
+        return "local" if normalized in {"local", "file", "sqlite"} else normalized
+
+    @field_validator("data_root", mode="before")
+    @classmethod
+    def _normalize_data_root(cls, value: object) -> Path:
+        return Path(str(value or "/data"))
+
+    @field_validator("worker_concurrency", mode="before")
+    @classmethod
+    def _normalize_worker_concurrency(cls, value: object) -> int:
+        try:
+            return max(1, int(str(value).strip()))
+        except (TypeError, ValueError):
+            return 1
+
+    @field_validator("ffmpeg_threads", mode="before")
+    @classmethod
+    def _normalize_ffmpeg_threads(cls, value: object) -> int:
+        try:
+            return max(1, min(32, int(str(value).strip())))
+        except (TypeError, ValueError):
+            return 1
+
+    @property
+    def input_dir(self) -> Path:
+        return self.data_root / "input"
+
+    @property
+    def outputs_dir(self) -> Path:
+        return self.data_root / "outputs"
+
+    @property
+    def temp_dir(self) -> Path:
+        return self.data_root / "temp"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.data_root / "logs"
+
+    @property
+    def data_dir(self) -> Path:
+        return self.data_root / "data"
+
+    @property
+    def media_roots(self) -> tuple[MediaRoot, ...]:
+        return _parse_media_roots(self.media_mounts, input_dir=self.input_dir)
 
 
 def _derive_key_from_label(label: str, used_keys: set[str]) -> str:
@@ -87,46 +152,41 @@ def _parse_media_roots(raw_value: str, *, input_dir: Path) -> tuple[MediaRoot, .
     return tuple(roots)
 
 
+def _load_or_create_jwt_secret(data_dir: Path) -> str:
+    """Persist an auto-generated JWT secret so sessions survive restarts.
+
+    Regenerating the secret on every process start invalidated all sessions
+    and broke multi-process deployments (each process got its own secret).
+    """
+    secret_path = data_dir / "jwt_secret"
+    try:
+        existing = secret_path.read_text().strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+
+    import secrets
+
+    secret = secrets.token_hex(32)
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        secret_path.touch(mode=0o600, exist_ok=True)
+        secret_path.write_text(secret)
+        secret_path.chmod(0o600)
+    except OSError:
+        # DATA_ROOT not writable: fall back to an ephemeral secret rather than
+        # failing startup; sessions will not survive restarts in that case.
+        pass
+    return secret
+
+
 @lru_cache()
 def get_settings() -> Settings:
-    data_root = Path(os.getenv("DATA_ROOT", "/data"))
-    input_dir = data_root / "input"
-    outputs_dir = data_root / "outputs"
-    temp_dir = data_root / "temp"
-    logs_dir = data_root / "logs"
-    data_dir = data_root / "data"
-
-    media_mounts_raw = os.getenv("MEDIA_MOUNTS", "")
-    media_roots = _parse_media_roots(media_mounts_raw, input_dir=input_dir)
-
-    raw_concurrency = os.getenv("WORKER_CONCURRENCY", "1").strip()
-    try:
-        worker_concurrency = max(1, int(raw_concurrency))
-    except ValueError:
-        worker_concurrency = 1
-
-    app_username = os.getenv("APP_USERNAME", "admin")
-    app_password = os.getenv("APP_PASSWORD", "12345678")
-    jwt_secret = os.getenv("JWT_SECRET")
-    if not jwt_secret:
-        import secrets
-
-        jwt_secret = secrets.token_hex(32)
-
-    return Settings(
-        redis_url=os.getenv("REDIS_URL", "redis://redis:6379/0"),
-        data_root=data_root,
-        input_dir=input_dir,
-        outputs_dir=outputs_dir,
-        temp_dir=temp_dir,
-        logs_dir=logs_dir,
-        data_dir=data_dir,
-        media_roots=media_roots,
-        worker_concurrency=worker_concurrency,
-        app_username=app_username,
-        app_password=app_password,
-        jwt_secret=jwt_secret,
-    )
+    settings = Settings()
+    if settings.jwt_secret.strip():
+        return settings
+    return settings.model_copy(update={"jwt_secret": _load_or_create_jwt_secret(settings.data_dir)})
 
 
 def ensure_runtime_dirs(settings: Settings) -> None:

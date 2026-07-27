@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -15,14 +15,39 @@ class JobStatus(str, Enum):
     failed = "failed"
 
 
+class ExportProfile(StrEnum):
+    h264_mp4 = "h264_mp4"
+    h265_mp4 = "h265_mp4"
+    vp9_webm = "vp9_webm"
+
+
+class VideoExport(StrEnum):
+    mp4 = "mp4"
+    mkv = "mkv"
+    webm = "webm"
+
+
+class AudioExport(StrEnum):
+    copy = "copy"
+    aac = "aac"
+    mp3 = "mp3"
+    opus = "opus"
+
+
+class SubtitleExport(StrEnum):
+    none = "none"
+    embedded = "embedded"
+    separate_srt = "separate_srt"
+
+
 class JobCreateRequest(BaseModel):
     input_filename: Optional[str] = Field(default=None, max_length=1024)
     source_root_key: Optional[str] = Field(default=None, max_length=64)
     source_path: Optional[str] = Field(default=None, max_length=2048)
-    profile: str = Field(default="h264_mp4", max_length=100)
-    video_export: str = Field(default="mp4", max_length=16)
-    audio_export: str = Field(default="copy", max_length=16)
-    subtitle_export: str = Field(default="none", max_length=32)
+    profile: ExportProfile = ExportProfile.h264_mp4
+    video_export: VideoExport = VideoExport.mp4
+    audio_export: AudioExport = AudioExport.copy
+    subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)
 
 
@@ -40,10 +65,10 @@ class JobRecord(BaseModel):
         """Normalize legacy 'processing' status to 'running' for backward compatibility."""
         return "running" if value == "processing" else value
 
-    profile: str
-    video_export: str = Field(default="mp4", max_length=16)
-    audio_export: str = Field(default="copy", max_length=16)
-    subtitle_export: str = Field(default="none", max_length=32)
+    profile: ExportProfile
+    video_export: VideoExport = VideoExport.mp4
+    audio_export: AudioExport = AudioExport.copy
+    subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)
     input_filename: Optional[str] = None
     source_root_key: Optional[str] = None
@@ -161,7 +186,7 @@ class WorkerHealthResponse(BaseModel):
 
 
 class JobIdsRequest(BaseModel):
-    job_ids: list[str] = Field(default_factory=list)
+    job_ids: list[str] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode="after")
     def _normalize_ids(self) -> "JobIdsRequest":
@@ -237,10 +262,10 @@ class UiPreferences(BaseModel):
 
 
 class DefaultExportSettings(BaseModel):
-    profile: str = Field(default="h264_mp4", max_length=100)
-    video_export: str = Field(default="mp4", max_length=16)
-    audio_export: str = Field(default="copy", max_length=16)
-    subtitle_export: str = Field(default="none", max_length=32)
+    profile: ExportProfile = ExportProfile.h264_mp4
+    video_export: VideoExport = VideoExport.mp4
+    audio_export: AudioExport = AudioExport.copy
+    subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("subtitle_language", mode="before")

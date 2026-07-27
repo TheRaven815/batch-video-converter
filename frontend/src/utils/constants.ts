@@ -1,6 +1,21 @@
-import type { AudioExport, ExportSettings, JobStatus, SubtitleExport, VideoExport } from '../models';
+import type {
+  AudioExport,
+  ExportSettings,
+  JobStatus,
+  SubtitleExport,
+  VideoExport,
+} from '../models';
 
-export const allowedExtensions = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg']);
+export const allowedExtensions = new Set([
+  'mp4',
+  'mov',
+  'mkv',
+  'avi',
+  'webm',
+  'm4v',
+  'mpg',
+  'mpeg',
+]);
 export const pollMs = 5000;
 export const presetStorageKey = 'video-converter-presets-v1';
 

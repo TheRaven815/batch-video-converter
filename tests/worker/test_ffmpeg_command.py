@@ -223,15 +223,17 @@ def test_subtitle_embedded_with_language() -> None:
     )
 
     assert _extract(cmd, "-c:s") == "copy"
-    assert "-map" in cmd
-    assert "0" in cmd
-    assert "-0:s" in cmd
+    # Explicit stream selection: one video, one audio, matching subtitles.
+    # A bare "-map 0" would also pull attachments/data streams.
+    assert "0:v:0" in cmd
+    assert "0:a:0?" in cmd
     assert "0:s:m:language:eng?" in cmd
+    assert "0" not in cmd
+    assert "-0:s" not in cmd
 
 
 def test_subtitle_embedded_without_language() -> None:
-    """Embedded subtitles without a specific language should still set -c:s copy
-    but should NOT add any -map filters (all subtitle streams pass through)."""
+    """Embedded subtitles without a language pick the first subtitle stream explicitly."""
     cmd = _ffmpeg_command(
         INPUT,
         OUTPUT_MKV,
@@ -243,7 +245,39 @@ def test_subtitle_embedded_without_language() -> None:
     )
 
     assert _extract(cmd, "-c:s") == "copy"
-    assert not _has_flag(cmd, "-map")
+    assert "0:v:0" in cmd
+    assert "0:a:0?" in cmd
+    assert "0:s:0?" in cmd
+
+
+def test_subtitle_embedded_mp4_uses_mov_text() -> None:
+    """MP4 cannot hold SRT/ASS; embedded subtitles must be transcoded to mov_text."""
+    cmd = _ffmpeg_command(
+        INPUT,
+        OUTPUT_MP4,
+        profile="h264_mp4",
+        video_export="mp4",
+        audio_export="aac",
+        subtitle_export="embedded",
+        subtitle_language="eng",
+    )
+
+    assert _extract(cmd, "-c:s") == "mov_text"
+
+
+def test_subtitle_embedded_webm_uses_webvtt() -> None:
+    """WebM only accepts WebVTT subtitle streams."""
+    cmd = _ffmpeg_command(
+        INPUT,
+        OUTPUT_WEBM,
+        profile="vp9_webm",
+        video_export="webm",
+        audio_export="opus",
+        subtitle_export="embedded",
+        subtitle_language=None,
+    )
+
+    assert _extract(cmd, "-c:s") == "webvtt"
 
 
 def test_subtitle_none_produces_no_subtitle_flags() -> None:
@@ -258,6 +292,7 @@ def test_subtitle_none_produces_no_subtitle_flags() -> None:
     )
 
     assert not _has_flag(cmd, "-c:s")
+    assert "-sn" in cmd
     assert "copy" not in cmd or _extract(cmd, "-c:v") == "copy" or _extract(cmd, "-c:a") == "copy"
 
 
@@ -275,6 +310,7 @@ def test_subtitle_separate_srt_produces_no_subtitle_flags_in_main_command() -> N
     )
 
     assert not _has_flag(cmd, "-c:s")
+    assert "-sn" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +517,33 @@ def test_command_always_ends_with_output_path() -> None:
             subtitle_language=None,
         )
         assert cmd[-1] == str(out)
+
+
+def test_ffmpeg_threads_are_bounded_and_rendered() -> None:
+    cmd = _ffmpeg_command(
+        INPUT,
+        OUTPUT_MP4,
+        profile="h264_mp4",
+        video_export="mp4",
+        audio_export="aac",
+        subtitle_export="none",
+        subtitle_language=None,
+        ffmpeg_threads=4,
+    )
+
+    assert _extract(cmd, "-threads") == "4"
+
+    bounded = _ffmpeg_command(
+        INPUT,
+        OUTPUT_MP4,
+        profile="h264_mp4",
+        video_export="mp4",
+        audio_export="aac",
+        subtitle_export="none",
+        subtitle_language=None,
+        ffmpeg_threads=100,
+    )
+    assert _extract(bounded, "-threads") == "32"
 
 
 def test_input_path_not_duplicated_at_end() -> None:

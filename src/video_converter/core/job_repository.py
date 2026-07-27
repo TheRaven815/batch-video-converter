@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
-from redis import Redis
-
-from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME
+from video_converter.core.config import (
+    JOB_EVENTS_CHANNEL,
+    JOB_KEY_PREFIX,
+    JOBS_INDEX_KEY,
+    PROCESSING_QUEUE_NAME,
+    QUEUE_NAME,
+)
 from video_converter.core.models import JobRecord, JobStatus, now_iso
+from video_converter.core.storage import StorageClient
 
 DEFAULT_STALE_RUNNING_SECONDS = 60 * 60
 RUNNING_JOBS_INDEX_KEY = "jobs:status:running"
+logger = logging.getLogger(__name__)
 
 
 def _append_limited(values: list[Any], item: Any, limit: int) -> list[Any]:
@@ -18,7 +25,7 @@ def _append_limited(values: list[Any], item: Any, limit: int) -> list[Any]:
 
 
 class JobRepository:
-    def __init__(self, redis_client: Redis) -> None:
+    def __init__(self, redis_client: StorageClient) -> None:
         self.redis = redis_client
 
     def parse_record(self, raw: str) -> JobRecord | None:
@@ -49,6 +56,7 @@ class JobRepository:
             pipe, record.id, previous.status if previous else None, record.status
         )
         pipe.execute()
+        self._publish_record(record)
 
     def enqueue(self, record: JobRecord) -> None:
         self.enqueue_many([record])
@@ -64,9 +72,10 @@ class JobRepository:
             pipe.rpush(JOBS_INDEX_KEY, record.id)
             pipe.rpush(QUEUE_NAME, record.id)
             if record.status == JobStatus.running:
-                pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, record.id)
-                pipe.rpush(RUNNING_JOBS_INDEX_KEY, record.id)
+                pipe.sadd(RUNNING_JOBS_INDEX_KEY, record.id)
         pipe.execute()
+        for record in records:
+            self._publish_record(record)
 
     def list_ids(self) -> list[str]:
         return list(self.redis.lrange(JOBS_INDEX_KEY, 0, -1))
@@ -95,10 +104,24 @@ class JobRepository:
         return records, next_cursor
 
     def count_running_jobs(self) -> int:
-        return int(self.redis.llen(RUNNING_JOBS_INDEX_KEY) or 0)
+        return int(self.redis.scard(RUNNING_JOBS_INDEX_KEY) or 0)
 
     def remove_from_queue(self, job_id: str) -> int:
         return int(self.redis.lrem(QUEUE_NAME, 0, job_id) or 0)
+
+    def dequeue(self, timeout: int = 5) -> str | None:
+        """Atomically move the next job id from the queue to the processing list.
+
+        The id stays on the processing list until :meth:`acknowledge` (or a
+        requeue) removes it, so jobs survive a worker crash between dequeue
+        and completion.
+        """
+        job_id = self.redis.blmove(QUEUE_NAME, PROCESSING_QUEUE_NAME, timeout, "LEFT", "RIGHT")
+        return str(job_id) if job_id else None
+
+    def acknowledge(self, job_id: str) -> None:
+        """Drop a job id from the processing list once handling has finished."""
+        self.redis.lrem(PROCESSING_QUEUE_NAME, 0, job_id)
 
     def requeue_existing(self, record: JobRecord) -> None:
         previous = self.get(record.id)
@@ -107,16 +130,23 @@ class JobRepository:
         self._sync_running_index(
             pipe, record.id, previous.status if previous else None, record.status
         )
+        # lrem before rpush keeps the queue and processing list duplicate-free
+        # even when recovery paths race with each other.
+        pipe.lrem(PROCESSING_QUEUE_NAME, 0, record.id)
+        pipe.lrem(QUEUE_NAME, 0, record.id)
         pipe.rpush(QUEUE_NAME, record.id)
         pipe.execute()
+        self._publish_record(record)
 
     def delete(self, job_id: str) -> None:
         pipe = self.redis.pipeline(transaction=True)
         pipe.lrem(QUEUE_NAME, 0, job_id)
+        pipe.lrem(PROCESSING_QUEUE_NAME, 0, job_id)
         pipe.lrem(JOBS_INDEX_KEY, 0, job_id)
-        pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, job_id)
+        pipe.srem(RUNNING_JOBS_INDEX_KEY, job_id)
         pipe.delete(f"{JOB_KEY_PREFIX}{job_id}")
         pipe.execute()
+        self._publish_deleted(job_id)
 
     def update_status(
         self,
@@ -197,6 +227,7 @@ class JobRepository:
         pipe.set(f"{JOB_KEY_PREFIX}{record.id}", record.model_dump_json())
         self._sync_running_index(pipe, record.id, previous_status, status)
         pipe.execute()
+        self._publish_record(record)
         return record
 
     def _sync_running_index(
@@ -205,38 +236,96 @@ class JobRepository:
         if previous_status == new_status:
             return
         if previous_status == JobStatus.running:
-            pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, job_id)
+            pipe.srem(RUNNING_JOBS_INDEX_KEY, job_id)
         if new_status == JobStatus.running:
-            pipe.lrem(RUNNING_JOBS_INDEX_KEY, 0, job_id)
-            pipe.rpush(RUNNING_JOBS_INDEX_KEY, job_id)
+            pipe.sadd(RUNNING_JOBS_INDEX_KEY, job_id)
+
+    def _publish_record(self, record: JobRecord) -> None:
+        try:
+            self.redis.publish(
+                JOB_EVENTS_CHANNEL,
+                json.dumps(
+                    {
+                        "event": "job_updated",
+                        "timestamp": now_iso(),
+                        "data": {"job": record.model_dump(mode="json")},
+                    }
+                ),
+            )
+        except Exception:
+            logger.warning("failed to publish job update", exc_info=True)
+
+    def _publish_deleted(self, job_id: str) -> None:
+        try:
+            self.redis.publish(
+                JOB_EVENTS_CHANNEL,
+                json.dumps(
+                    {
+                        "event": "job_deleted",
+                        "timestamp": now_iso(),
+                        "data": {"job_id": job_id},
+                    }
+                ),
+            )
+        except Exception:
+            logger.warning("failed to publish job deletion", exc_info=True)
+
+    def recover_processing_orphans(self) -> list[JobRecord]:
+        """Requeue jobs stranded on the processing list.
+
+        Safe to call only when no job on the processing list is actively being
+        worked on (i.e. at worker startup): every id found there was dequeued
+        by a worker that never finished it.
+        """
+        recovered: list[JobRecord] = []
+        for job_id in list(self.redis.lrange(PROCESSING_QUEUE_NAME, 0, -1)):
+            record = self.get(job_id)
+            if record is None or record.status in {
+                JobStatus.completed,
+                JobStatus.failed,
+                JobStatus.cancelled,
+            }:
+                self.redis.lrem(PROCESSING_QUEUE_NAME, 0, job_id)
+                continue
+            self._requeue_recovered(record, "Recovered interrupted job and requeued")
+            recovered.append(record)
+        return recovered
 
     def recover_stale_running_jobs(
-        self, *, stale_after_seconds: int = DEFAULT_STALE_RUNNING_SECONDS
+        self,
+        *,
+        stale_after_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
+        exclude_ids: set[str] | None = None,
     ) -> list[JobRecord]:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
         recovered: list[JobRecord] = []
 
         for job_id in self.list_ids():
+            if exclude_ids and job_id in exclude_ids:
+                continue
             record = self.get(job_id)
             if record is None or record.status != JobStatus.running:
                 continue
             if not _is_stale(record, cutoff):
                 continue
 
-            now = now_iso()
-            record.status = JobStatus.queued
-            record.cancel_requested = False
-            record.progress_percent = 0
-            record.progress_phase = "queued"
-            record.progress_message = "Recovered stale running job and requeued"
-            record.progress_updated_at = now
-            record.updated_at = now
-            record.started_at = None
-            record.finished_at = None
-            self.requeue_existing(record)
+            self._requeue_recovered(record, "Recovered stale running job and requeued")
             recovered.append(record)
 
         return recovered
+
+    def _requeue_recovered(self, record: JobRecord, message: str) -> None:
+        now = now_iso()
+        record.status = JobStatus.queued
+        record.cancel_requested = False
+        record.progress_percent = 0
+        record.progress_phase = "queued"
+        record.progress_message = message
+        record.progress_updated_at = now
+        record.updated_at = now
+        record.started_at = None
+        record.finished_at = None
+        self.requeue_existing(record)
 
 
 def _is_stale(record: JobRecord, cutoff: datetime) -> bool:

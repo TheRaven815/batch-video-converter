@@ -24,6 +24,14 @@ class _Pipeline:
         self.commands.append(("lrem", (key, count, value)))
         return self
 
+    def sadd(self, key: str, *values: str) -> "_Pipeline":
+        self.commands.append(("sadd", (key, *values)))
+        return self
+
+    def srem(self, key: str, *values: str) -> "_Pipeline":
+        self.commands.append(("srem", (key, *values)))
+        return self
+
     def delete(self, key: str) -> "_Pipeline":
         self.commands.append(("delete", (key,)))
         return self
@@ -41,8 +49,9 @@ class _FakeRedis:
         self.lists: dict[str, list[str]] = {
             QUEUE_NAME: [],
             JOBS_INDEX_KEY: [],
-            RUNNING_JOBS_INDEX_KEY: [],
         }
+        self.sets: dict[str, set[str]] = {RUNNING_JOBS_INDEX_KEY: set()}
+        self.published: list[tuple[str, str]] = []
 
     def pipeline(self, transaction: bool = True) -> _Pipeline:
         return _Pipeline(self)
@@ -72,6 +81,25 @@ class _FakeRedis:
         removed = values.count(value)
         self.lists[key] = [item for item in values if item != value]
         return removed
+
+    def sadd(self, key: str, *values: str) -> int:
+        target = self.sets.setdefault(key, set())
+        before = len(target)
+        target.update(values)
+        return len(target) - before
+
+    def srem(self, key: str, *values: str) -> int:
+        target = self.sets.setdefault(key, set())
+        before = len(target)
+        target.difference_update(values)
+        return before - len(target)
+
+    def scard(self, key: str) -> int:
+        return len(self.sets.get(key, set()))
+
+    def publish(self, channel: str, message: str) -> int:
+        self.published.append((channel, message))
+        return 0
 
     def delete(self, key: str) -> int:
         existed = key in self.values
@@ -143,7 +171,7 @@ def test_recover_stale_running_jobs_requeues_only_old_running_jobs() -> None:
     assert recovered_stale.status == JobStatus.queued
     assert recovered_stale.progress_phase == "queued"
     assert fake_redis.lists[QUEUE_NAME] == ["stale"]
-    assert fake_redis.lists[RUNNING_JOBS_INDEX_KEY] == ["fresh"]
+    assert fake_redis.sets[RUNNING_JOBS_INDEX_KEY] == {"fresh"}
     assert repository.count_running_jobs() == 1
     assert repository.get("fresh").status == JobStatus.running  # type: ignore[union-attr]
     assert repository.get("done").status == JobStatus.completed  # type: ignore[union-attr]

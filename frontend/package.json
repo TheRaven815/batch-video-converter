@@ -6,19 +6,40 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "generate:api": "PYTHONPATH=../src ../venv/bin/python ../scripts/export_openapi.py /tmp/bvc-openapi.json && openapi-typescript /tmp/bvc-openapi.json -o src/generated/api-schema.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tanstack/react-query": "^5.101.4",
     "lucide-react": "^1.18.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "sonner": "^2.0.7",
+    "wouter": "^3.10.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "25.6.2",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.1",
-    "typescript": "6.0.3",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0",
     "vite": "^8.0.16"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.8",
+    "js-yaml": "4.3.0"
   }
 }

@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from video_converter.core.storage import LocalFileStore
 
 
@@ -68,3 +70,29 @@ def test_local_file_store_lrem_delete_and_expiry(tmp_path) -> None:
     assert store.set("job:2", "payload") is True
     assert store.delete("job:2") == 1
     assert store.get("job:2") is None
+
+
+def test_local_file_store_sets_are_unique_and_pipeline_safe(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+
+    assert store.sadd("running", "job-1", "job-1", "job-2") == 2
+    assert store.scard("running") == 2
+    pipe = store.pipeline()
+    pipe.srem("running", "job-1")
+    pipe.sadd("running", "job-3")
+    assert pipe.execute() == [1, 1]
+    assert store.scard("running") == 2
+
+
+def test_local_file_store_pipeline_rolls_back_on_unsupported_operation(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+
+    with pytest.raises(ValueError, match="Unsupported local pipeline operation"):
+        store._execute_pipeline(
+            [
+                ("set", ("rolled-back", "value", None)),
+                ("unsupported", ()),
+            ]
+        )
+
+    assert store.get("rolled-back") is None

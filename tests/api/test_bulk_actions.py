@@ -138,27 +138,32 @@ def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
     assert skip_map["missing"] == "Job not found"
 
 
-def test_archive_jobs_bulk_soft_deletes_non_running_records(monkeypatch: Any) -> None:
+def test_archive_jobs_bulk_soft_deletes_terminal_records_only(monkeypatch: Any) -> None:
     fake_repository = _FakeJobRepository()
-    fake_repository.queue = ["archive-1", "running-1", "other"]
+    fake_repository.queue = ["queued-1", "other"]
 
     records = {
         "archive-1": _make_job("archive-1", JobStatus.completed),
         "running-1": _make_job("running-1", JobStatus.running),
+        "queued-1": _make_job("queued-1", JobStatus.queued),
     }
 
     monkeypatch.setattr(api, "job_repository", fake_repository)
     monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
 
-    payload = JobIdsRequest(job_ids=["archive-1", "running-1", "missing"])
+    payload = JobIdsRequest(job_ids=["archive-1", "running-1", "queued-1", "missing"])
     result = api.archive_jobs_bulk(payload)
 
     assert [item.id for item in result.updated] == ["archive-1"]
     assert records["archive-1"].archived is True
-    assert "archive-1" not in fake_repository.queue
+
+    # Archiving a queued job must not strand it: it stays queued and unarchived.
+    assert records["queued-1"].archived is False
+    assert "queued-1" in fake_repository.queue
 
     skip_map = {item.job_id: item.reason for item in result.skipped}
-    assert skip_map["running-1"] == "Running job cannot be archived"
+    assert skip_map["running-1"] == "Active job cannot be archived; cancel it first"
+    assert skip_map["queued-1"] == "Active job cannot be archived; cancel it first"
     assert skip_map["missing"] == "Job not found"
 
 
@@ -186,3 +191,20 @@ def test_delete_jobs_bulk_skips_running_and_removes_persisted_records(monkeypatc
     skip_map = {item.job_id: item.reason for item in result.skipped}
     assert skip_map["running-1"] == "Running job cannot be deleted"
     assert skip_map["missing"] == "Job not found"
+
+
+def test_archived_terminal_job_can_be_started_and_becomes_visible(monkeypatch: Any) -> None:
+    fake_repository = _FakeJobRepository()
+    record = _make_job("restart-1", JobStatus.completed)
+    records = {record.id: record}
+    monkeypatch.setattr(api, "job_repository", fake_repository)
+    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+
+    archived = api.archive_jobs_bulk(JobIdsRequest(job_ids=[record.id]))
+    restarted = api.start_jobs_bulk(JobIdsRequest(job_ids=[record.id]))
+
+    assert [item.id for item in archived.updated] == [record.id]
+    assert [item.id for item in restarted.updated] == [record.id]
+    assert record.status == JobStatus.queued
+    assert record.archived is False
+    assert fake_repository.queue == [record.id]

@@ -13,13 +13,28 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      - ./data:${DATA_ROOT:-/data}
+      # Keep the in-container contract stable. DATA_ROOT belongs inside the
+      # container and must not accidentally turn into a host bind target.
+      - ./data:/data
       # Add/remove media mount lines as needed.
       - ./media/movies:/media/movies:ro
       - ./media/series:/media/series:ro
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health/ready', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 10m
     deploy:
       resources:
         limits:
@@ -32,9 +47,12 @@ services:
     image: redis:7.2-alpine
     command: redis-server --appendonly yes
     ports:
-      - "6380:6379"
+      # Bound to localhost only: exposing an unauthenticated Redis on the LAN
+      # would let anyone wipe the queue. Remove the mapping entirely if you
+      # don't need host access for local development.
+      - "127.0.0.1:6380:6379"
     volumes:
-      - ./data/redis:/data
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -46,3 +64,6 @@ services:
           memory: 256m
           cpus: "0.5"
     restart: unless-stopped
+
+volumes:
+  redis-data:

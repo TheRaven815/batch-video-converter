@@ -1,4 +1,4 @@
-import type { JobRecord, OutputFileDto } from '../models';
+import type { ExportProfile, JobRecord, JobStatus } from '../models';
 
 export function fileName(path: string): string {
   return path.split('/').filter(Boolean).pop() || path || 'video';
@@ -18,7 +18,7 @@ export function formatDate(value?: string | null): string {
 
 export function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let size = bytes;
   let unit = 0;
   while (size >= 1024 && unit < units.length - 1) {
@@ -31,19 +31,34 @@ export function formatBytes(bytes: number): string {
 export function formatEta(seconds?: number | null): string {
   if (seconds === null || seconds === undefined) return 'ETA —';
   if (seconds < 60) return `ETA ${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remaining = seconds % 60;
-  return `ETA ${minutes}m ${remaining}s`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `ETA ${hours}h ${minutes}m`;
+  return `ETA ${minutes}m ${seconds % 60}s`;
 }
 
-export function deriveProfile(videoExport: string): string {
+export function deriveProfile(videoExport: string): ExportProfile {
   if (videoExport === 'webm') return 'vp9_webm';
   if (videoExport === 'mkv') return 'h265_mp4';
   return 'h264_mp4';
 }
 
-export function normalizeStatus(status: string): string {
-  return status;
+export function normalizeStatus(status: string): JobStatus {
+  const value = (status || '').toLowerCase();
+  if (value === 'done' || value === 'success' || value === 'succeeded') return 'completed';
+  if (value === 'error') return 'failed';
+  if (value === 'pending') return 'queued';
+  return value as JobStatus;
+}
+
+export type StatusVariant = 'done' | 'running' | 'queued' | 'failed' | 'cancelled';
+
+export function statusVariant(status: string): StatusVariant {
+  const normalized = normalizeStatus(status);
+  if (normalized === 'completed') return 'done';
+  if (normalized === 'running' || normalized === 'failed' || normalized === 'cancelled')
+    return normalized;
+  return 'queued';
 }
 
 export function getProgress(job: JobRecord): number {
@@ -58,59 +73,18 @@ export function uniqueLanguages(staged: { subtitleLanguages?: string[] }[]): str
 
 export function sortJobs(jobs: JobRecord[], sort: string): JobRecord[] {
   const copy = [...jobs];
-  if (sort === 'oldest') return copy.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  if (sort === 'oldest')
+    return copy.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   if (sort === 'progress') return copy.sort((a, b) => getProgress(b) - getProgress(a));
-  return copy.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime() || b.id.localeCompare(a.id));
-}
-
-function sameJob(left: JobRecord, right: JobRecord): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-export function mergeJobs(current: JobRecord[], incoming: JobRecord[]): JobRecord[] {
-  const currentById = new Map(current.map((job) => [job.id, job]));
-  let changed = current.length !== incoming.length;
-  const next = incoming.map((job) => {
-    const existing = currentById.get(job.id);
-    if (existing && sameJob(existing, job)) return existing;
-    changed = true;
-    return job;
-  });
-  if (!changed) {
-    for (let index = 0; index < current.length; index += 1) {
-      if (current[index]?.id !== next[index]?.id) {
-        changed = true;
-        break;
-      }
-    }
-  }
-  return changed ? next : current;
-}
-
-function sameOutput(left: OutputFileDto, right: OutputFileDto): boolean {
-  return left.filename === right.filename && left.size_bytes === right.size_bytes && left.modified_at === right.modified_at && left.download_url === right.download_url;
-}
-
-export function mergeOutputs(current: OutputFileDto[], incoming: OutputFileDto[]): OutputFileDto[] {
-  const currentByName = new Map(current.map((output) => [output.filename, output]));
-  let changed = current.length !== incoming.length;
-  const next = incoming.map((output) => {
-    const existing = currentByName.get(output.filename);
-    if (existing && sameOutput(existing, output)) return existing;
-    changed = true;
-    return output;
-  });
-  if (!changed) {
-    for (let index = 0; index < current.length; index += 1) {
-      if (current[index]?.filename !== next[index]?.filename) {
-        changed = true;
-        break;
-      }
-    }
-  }
-  return changed ? next : current;
+  return copy.sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+      b.id.localeCompare(a.id),
+  );
 }
 
 export function createPresetId(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `preset-${Date.now()}`;
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `preset-${Date.now()}`;
 }

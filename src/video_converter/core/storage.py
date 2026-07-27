@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 import time
 from pathlib import Path
@@ -26,6 +25,14 @@ class LocalPipeline:
 
     def lrem(self, key: str, count: int, value: str) -> LocalPipeline:
         self.operations.append(("lrem", (key, count, value)))
+        return self
+
+    def sadd(self, key: str, *values: str) -> LocalPipeline:
+        self.operations.append(("sadd", (key, *values)))
+        return self
+
+    def srem(self, key: str, *values: str) -> LocalPipeline:
+        self.operations.append(("srem", (key, *values)))
         return self
 
     def delete(self, key: str) -> LocalPipeline:
@@ -97,6 +104,9 @@ class LocalFileStore:
                 )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_lists_key_position ON lists(key, position)"
+                )
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS sets (key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (key, value))"
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -239,6 +249,55 @@ class LocalFileStore:
                 conn.execute("ROLLBACK")
                 raise
 
+    def sadd(self, key: str, *values: str) -> int:
+        if not values:
+            return 0
+        with self._lock, self._connect() as conn:
+            self._begin_write(conn)
+            try:
+                added = 0
+                for value in values:
+                    cursor = conn.execute(
+                        "INSERT OR IGNORE INTO sets(key, value) VALUES(?, ?)",
+                        (key, value),
+                    )
+                    added += int(cursor.rowcount or 0)
+                conn.execute("COMMIT")
+                return added
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def srem(self, key: str, *values: str) -> int:
+        if not values:
+            return 0
+        with self._lock, self._connect() as conn:
+            self._begin_write(conn)
+            try:
+                removed = 0
+                for value in values:
+                    cursor = conn.execute(
+                        "DELETE FROM sets WHERE key = ? AND value = ?",
+                        (key, value),
+                    )
+                    removed += int(cursor.rowcount or 0)
+                conn.execute("COMMIT")
+                return removed
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def scard(self, key: str) -> int:
+        with self._lock, self._connect() as conn:
+            return int(
+                conn.execute("SELECT COUNT(*) FROM sets WHERE key = ?", (key,)).fetchone()[0]
+            )
+
+    def publish(self, channel: str, message: str) -> int:  # noqa: ARG002
+        # Cross-process pub/sub is provided by Redis. Local mode relies on the
+        # SSE polling fallback because SQLite is only a queue/storage shim.
+        return 0
+
     def blpop(self, key: str, timeout: int = 0) -> tuple[str, str] | None:
         deadline = None if timeout == 0 else time.monotonic() + timeout
         while True:
@@ -248,6 +307,56 @@ class LocalFileStore:
             if deadline is not None and time.monotonic() >= deadline:
                 return None
             time.sleep(0.25)
+
+    def blmove(
+        self,
+        first_list: str,
+        second_list: str,
+        timeout: int = 0,
+        src: str = "LEFT",
+        dest: str = "RIGHT",
+    ) -> str | None:
+        """Atomically move an element between lists, blocking like Redis BLMOVE.
+
+        Only the LEFT→RIGHT direction used by the job queue is supported.
+        """
+        if src != "LEFT" or dest != "RIGHT":
+            raise ValueError("LocalFileStore.blmove only supports src=LEFT, dest=RIGHT")
+
+        deadline = None if timeout == 0 else time.monotonic() + timeout
+        while True:
+            moved = self._move_left_to_right(first_list, second_list)
+            if moved is not None:
+                return moved
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            time.sleep(0.25)
+
+    def _move_left_to_right(self, first_list: str, second_list: str) -> str | None:
+        with self._lock, self._connect() as conn:
+            self._begin_write(conn)
+            try:
+                row = conn.execute(
+                    "SELECT position, value FROM lists WHERE key = ? ORDER BY position ASC LIMIT 1",
+                    (first_list,),
+                ).fetchone()
+                if row is None:
+                    conn.execute("COMMIT")
+                    return None
+                position, value = row
+                conn.execute(
+                    "DELETE FROM lists WHERE key = ? AND position = ?", (first_list, position)
+                )
+                next_position = self._next_position(conn, second_list)
+                conn.execute(
+                    "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                    (second_list, next_position, value),
+                )
+                conn.execute("COMMIT")
+                return str(value)
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
     def pipeline(
         self, transaction: bool = True
@@ -322,6 +431,22 @@ class LocalFileStore:
                                 (key, *positions),
                             )
                         results.append(len(positions))
+                    elif name in {"sadd", "srem"}:
+                        key, *values = args
+                        changed = 0
+                        for value in values:
+                            if name == "sadd":
+                                cursor = conn.execute(
+                                    "INSERT OR IGNORE INTO sets(key, value) VALUES(?, ?)",
+                                    (key, value),
+                                )
+                            else:
+                                cursor = conn.execute(
+                                    "DELETE FROM sets WHERE key = ? AND value = ?",
+                                    (key, value),
+                                )
+                            changed += int(cursor.rowcount or 0)
+                        results.append(changed)
                     elif name == "delete":
                         (key,) = args
                         cursor = conn.execute("DELETE FROM kv WHERE key = ?", (key,))
@@ -339,14 +464,13 @@ StorageClient = redis.Redis | LocalFileStore
 
 
 def get_storage_backend() -> str:
-    value = os.getenv("VIDEO_CONVERTER_STORAGE", "redis").strip().lower()
-    if value in {"local", "file", "sqlite"}:
-        return "local"
-    return "redis"
+    from video_converter.core.config import get_settings
+
+    return get_settings().video_converter_storage
 
 
 def create_storage_client(settings: Settings) -> StorageClient:
-    backend = get_storage_backend()
+    backend = settings.video_converter_storage
     if backend == "local":
         return LocalFileStore(settings.data_dir / "local_queue.sqlite3")
     return redis.Redis.from_url(settings.redis_url, decode_responses=True)
