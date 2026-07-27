@@ -48,6 +48,14 @@ export const defaultSettings: ExportSettings = {
   audio_export: 'copy',
   subtitle_export: 'none',
   subtitle_language: '',
+  quality_crf: 23,
+  target_video_bitrate: '',
+  audio_bitrate_kbps: 128,
+  resolution: 'original',
+  encoder_preset: 'veryfast',
+  hardware_acceleration: 'auto',
+  max_attempts: 3,
+  priority: 0,
 };
 
 export function loadStoredPresets(): LocalPreset[] {

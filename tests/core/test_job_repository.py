@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from video_converter.core.config import JOBS_INDEX_KEY, QUEUE_NAME
+from video_converter.core.config import (
+    BATCH_JOBS_KEY_PREFIX,
+    BATCHES_INDEX_KEY,
+    JOBS_INDEX_KEY,
+    QUEUE_NAME,
+)
 from video_converter.core.job_repository import RUNNING_JOBS_INDEX_KEY, JobRepository
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
@@ -141,6 +146,24 @@ def test_enqueue_many_persists_index_and_queue_in_one_pipeline() -> None:
     assert repository.get("job-2") is not None
 
 
+def test_enqueue_many_builds_batch_indices() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    first = _make_job("job-1", JobStatus.queued)
+    second = _make_job("job-2", JobStatus.queued)
+    first.batch_id = second.batch_id = "batch-1"
+
+    repository.enqueue_many([first, second])
+
+    assert repository.list_batch_ids() == ["batch-1"]
+    assert [record.id for record in repository.list_batch_records("batch-1")] == [
+        "job-1",
+        "job-2",
+    ]
+    assert fake_redis.lists[f"{BATCH_JOBS_KEY_PREFIX}batch-1"] == ["job-1", "job-2"]
+    assert fake_redis.lists[BATCHES_INDEX_KEY] == ["batch-1"]
+
+
 def test_list_records_page_reads_only_requested_index_slice() -> None:
     fake_redis = _FakeRedis()
     repository = JobRepository(fake_redis)  # type: ignore[arg-type]
@@ -175,3 +198,35 @@ def test_recover_stale_running_jobs_requeues_only_old_running_jobs() -> None:
     assert repository.count_running_jobs() == 1
     assert repository.get("fresh").status == JobStatus.running  # type: ignore[union-attr]
     assert repository.get("done").status == JobStatus.completed  # type: ignore[union-attr]
+
+
+def test_update_status_does_not_clear_existing_error_when_error_is_omitted() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    record = _make_job("job-1", JobStatus.failed)
+    record.error_message = "original failure"
+    repository.enqueue(record)
+
+    updated = repository.update_status(
+        record.id,
+        JobStatus.failed,
+        progress_percent=None,
+        progress_phase="failed",
+        progress_message="Still failed",
+    )
+
+    assert updated is not None
+    assert updated.error_message == "original failure"
+
+
+def test_requeue_existing_keeps_only_one_queue_entry() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    record = _make_job("job-1", JobStatus.running)
+    repository.enqueue(record)
+    record.status = JobStatus.queued
+
+    repository.requeue_existing(record)
+    repository.requeue_existing(record)
+
+    assert fake_redis.lists[QUEUE_NAME] == [record.id]

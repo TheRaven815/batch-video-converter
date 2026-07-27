@@ -13,6 +13,7 @@ import './styles.css';
 
 import {
   browseMedia,
+  actOnBatch,
   bulkArchive,
   bulkCancel,
   bulkDelete,
@@ -21,6 +22,8 @@ import {
   clearOutputs,
   createJobsBatch,
   getAuthToken,
+  getSystemSettings,
+  deleteOutput,
   setAuthToken,
   validateJobs,
 } from './api';
@@ -48,6 +51,7 @@ import {
   normalizeStatus,
   sortJobs,
 } from './utils/helpers';
+import { loadLanguage, translate } from './i18n';
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const ConvertPage = lazy(() => import('./pages/ConvertPage'));
@@ -60,6 +64,25 @@ type ConfirmRequest = {
   confirmLabel: string;
   action: () => void | Promise<void>;
 };
+
+function initialJobFilters(): JobFilters {
+  const query = window.location.hash.split('?')[1] ?? '';
+  const params = new URLSearchParams(query);
+  const status = params.get('status');
+  const sort = params.get('sort');
+  const source = params.get('source');
+  return {
+    q: params.get('q') ?? '',
+    status: ['queued', 'running', 'cancelled', 'completed', 'failed'].includes(status ?? '')
+      ? (status as JobStatus)
+      : 'all',
+    sort: ['oldest', 'progress'].includes(sort ?? '') ? (sort as JobFilters['sort']) : 'newest',
+    profile: params.get('profile') ?? '',
+    sourceType: ['server', 'legacy'].includes(source ?? '')
+      ? (source as JobFilters['sourceType'])
+      : 'all',
+  };
+}
 
 export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(Boolean(getAuthToken()));
@@ -75,13 +98,7 @@ export function App() {
   const [browserLoading, setBrowserLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
-  const [filters, setFilters] = useState<JobFilters>({
-    q: '',
-    status: 'all',
-    sort: 'newest',
-    profile: '',
-    sourceType: 'all',
-  });
+  const [filters, setFilters] = useState<JobFilters>(initialJobFilters);
   const [settings, setSettings] = useState<ExportSettings>(defaultSettings);
   const [presetSettings, setPresetSettings] = useState<ExportSettings>(defaultSettings);
   const [presets, setPresets] = useState<LocalPreset[]>(loadStoredPresets);
@@ -90,6 +107,7 @@ export function App() {
   const [presetDescription, setPresetDescription] = useState('');
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [language, setLanguage] = useState(loadLanguage);
 
   const showToast = useCallback((message: string, kind: ToastKind = 'info') => {
     toast[kind](message, { id: `${kind}:${message}` });
@@ -131,6 +149,40 @@ export function App() {
       return next.size === current.size ? current : next;
     });
   }, [server.jobs]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void getSystemSettings().then((stored) => {
+      const theme = stored.ui.theme;
+      const resolved =
+        theme === 'system'
+          ? window.matchMedia('(prefers-color-scheme: light)').matches
+            ? 'light'
+            : 'dark'
+          : theme;
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.dataset.density = stored.ui.density;
+    });
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams();
+      if (filters.q) params.set('q', filters.q);
+      if (filters.status !== 'all') params.set('status', filters.status);
+      if (filters.sort !== 'newest') params.set('sort', filters.sort);
+      if (filters.profile) params.set('profile', filters.profile);
+      if (filters.sourceType !== 'all') params.set('source', filters.sourceType);
+      const query = params.toString();
+      const hashPath = window.location.hash.split('?')[0] || '#/dashboard';
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${window.location.search}${hashPath}${query ? `?${query}` : ''}`,
+      );
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [filters]);
 
   useEffect(() => {
     if (!isMobileMenuOpen) return;
@@ -272,6 +324,49 @@ export function App() {
     [server, showToast],
   );
 
+  const handleDeleteOutput = useCallback(
+    (filename: string) =>
+      setConfirmRequest({
+        title: `Delete ${filename}?`,
+        body: 'This converted output will be permanently deleted.',
+        confirmLabel: 'Delete',
+        action: async () => {
+          await deleteOutput(filename);
+          showToast('Output deleted.', 'success');
+          await server.refreshAll();
+        },
+      }),
+    [server, showToast],
+  );
+
+  const runBatchAction = useCallback(
+    (batchId: string, action: 'cancel' | 'retry' | 'archive' | 'delete') => {
+      const execute = async () => {
+        const response = await actOnBatch(batchId, action);
+        showToast(
+          `${response.result.updated?.length ?? 0} job(s) ${
+            action === 'retry' ? 'queued' : `${action}ed`
+          }.`,
+          'success',
+        );
+        await server.refreshAll();
+      };
+      if (action === 'delete') {
+        setConfirmRequest({
+          title: 'Delete this batch?',
+          body: 'All non-running job records in this batch will be removed.',
+          confirmLabel: 'Delete Batch',
+          action: execute,
+        });
+      } else {
+        void execute().catch((error) =>
+          showToast(error instanceof Error ? error.message : 'Batch action failed.', 'error'),
+        );
+      }
+    },
+    [server, showToast],
+  );
+
   const submitBatch = useCallback(async () => {
     const selected = staged.filter((item) => item.selected);
     if (!selected.length) {
@@ -282,13 +377,21 @@ export function App() {
     try {
       const payload = selected.map((item) => ({
         input_filename: item.name,
-        source_root_key: item.rootKey,
-        source_path: item.sourcePath,
+        source_root_key: item.uploaded ? undefined : item.rootKey,
+        source_path: item.uploaded ? undefined : item.sourcePath,
         profile: deriveProfile(settings.video_export),
         video_export: settings.video_export,
         audio_export: settings.audio_export,
         subtitle_export: settings.subtitle_export,
         subtitle_language: settings.subtitle_language || null,
+        quality_crf: settings.quality_crf,
+        target_video_bitrate: settings.target_video_bitrate || null,
+        audio_bitrate_kbps: settings.audio_bitrate_kbps,
+        resolution: settings.resolution,
+        encoder_preset: settings.encoder_preset,
+        hardware_acceleration: settings.hardware_acceleration,
+        max_attempts: settings.max_attempts,
+        priority: settings.priority,
       }));
       const validation = await validateJobs(payload);
       if (validation.invalid_count) {
@@ -407,6 +510,7 @@ export function App() {
     setFilters,
     summary,
     outputs: server.outputs,
+    batches: server.batches,
     workerHealth: server.workerHealth,
     hasNextJobs: Boolean(server.hasNextJobs),
     hasNextOutputs: Boolean(server.hasNextOutputs),
@@ -416,6 +520,8 @@ export function App() {
     handleCancelJob,
     handleDeleteJob,
     handleClearOutputs,
+    handleDeleteOutput,
+    runBatchAction,
     showToast,
     presets,
     editingPresetId,
@@ -456,10 +562,10 @@ export function App() {
                 </button>
               </div>
               {[
-                ['/dashboard', 'Dashboard'],
-                ['/convert', 'Convert'],
-                ['/presets', 'Presets'],
-                ['/settings', 'Settings'],
+                ['/dashboard', translate(language, 'dashboard')],
+                ['/convert', translate(language, 'convert')],
+                ['/presets', translate(language, 'presets')],
+                ['/settings', translate(language, 'settings')],
               ].map(([path, label]) => (
                 <Link
                   key={path}
@@ -505,7 +611,19 @@ export function App() {
               disabled={server.jobsRefreshing}
             >
               <RotateCw size={14} className={server.jobsRefreshing ? 'spin' : ''} />
-              <span className="hidden-xs">Refresh</span>
+              <span className="hidden-xs">{translate(language, 'refresh')}</span>
+            </button>
+            <button
+              className="btn btn-outline"
+              onClick={() => {
+                const next = language === 'en' ? 'tr' : 'en';
+                localStorage.setItem('video-converter-language', next);
+                document.documentElement.lang = next;
+                setLanguage(next);
+              }}
+              aria-label="Change language"
+            >
+              {language.toUpperCase()}
             </button>
             <button
               className="btn btn-outline"
@@ -513,7 +631,7 @@ export function App() {
                 setAuthToken(null);
                 window.location.reload();
               }}
-              aria-label="Sign out"
+              aria-label={translate(language, 'signOut')}
             >
               <LogOut size={14} />
             </button>

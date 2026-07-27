@@ -63,7 +63,7 @@ For local development without Docker:
 For Docker/Coolify:
 
 - Docker and Docker Compose
-- Host media directories mounted into both the `api` and `worker` containers
+- Host media directories mounted read-only into the combined `app` container
 - Redis available through the Compose service
 - Enough CPU/RAM for FFmpeg jobs; keep concurrency at `1` on constrained devices
 
@@ -85,14 +85,15 @@ cp .env.example .env
 
 ```bat
 mkdir data
-mkdir media\Movies
-mkdir media\Series
+mkdir media\movies
+mkdir media\series
+mkdir media\downloads
 ```
 
 On Linux/macOS:
 
 ```sh
-mkdir -p data media/Movies media/Series
+mkdir -p data media/movies media/series media/downloads
 ```
 
 3. Start the stack:
@@ -220,53 +221,67 @@ DATA_ROOT=/data
 MEDIA_MOUNTS=Media=/data/input
 ```
 
-### Local Compose
+### Unified Compose
 
-`docker-compose.yml` is intended for local development:
+The repository has a single `docker-compose.yml` for local development,
+Coolify/Portainer, VPS deployments, and Raspberry Pi:
 
 - `app` supervises Uvicorn and the Python worker through `entrypoint.sh`.
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
-- `./data` is always mounted to the container path `/data`.
+- `APP_DATA_SOURCE` can be a bind path such as `./data` or the `app-data`
+  named volume.
 - Redis persistence uses the separate `redis-data` named volume.
-- Example media mounts are read-only: `./media/movies:/media/movies:ro` and `./media/series:/media/series:ro`.
+- All media mounts are read-only and their host paths are configured with
+  `MEDIA_MOVIES_SOURCE`, `MEDIA_SERIES_SOURCE`, and
+  `MEDIA_DOWNLOADS_SOURCE`.
 - The app healthcheck uses `/health/ready`, and Compose allows up to ten minutes
   for active FFmpeg work to drain during shutdown.
+
+Copy `.env.example` to `.env`, customize it, and always start the same file:
+
+```sh
+docker compose up --build -d
+```
+
+On Raspberry Pi 4, set `V4L2_DEVICE=/dev/video11` in `.env`. Leave it unset on
+Pi 5, which has no H.264 hardware encoder. For constrained systems, keep
+`WORKER_CONCURRENCY=1` and reduce `APP_MEMORY_LIMIT` if needed.
 
 When adding media roots, update both places together:
 
 1. Add `Label=/container/path` to `MEDIA_MOUNTS` in `.env`.
-2. Add the matching `:ro` volume line to the `app` service.
+2. Point the corresponding `MEDIA_*_SOURCE` variable at its host directory.
 
 ### Coolify
 
-Use `docker-compose.coolify.yml` for Git-based Coolify deployment.
+Coolify uses the same `docker-compose.yml`. Configure its environment variables
+in the Coolify UI; a second env or Compose file is not required.
 
 Recommended Coolify settings:
 
 - Source: Git repository.
 - Build/deploy type: Docker Compose.
-- Compose file: `docker-compose.coolify.yml`.
-- Public service: `api`.
+- Compose file: `docker-compose.yml`.
+- Public service: `app`.
 - Container port: `8765`.
 - Healthcheck path: `/health/ready`.
-- Example public host port in the compose file: `7777:8765`.
 
-Coolify compose details:
-
-- `app-data` named volume is mounted at `/data` for application data and outputs.
-- `redis-data` named volume stores Redis AOF data.
-- Example host media paths are mounted read-only into container media roots:
-  - `./data/media/movies` -> `/media/movies:ro`
-  - `./data/media/tv-series` -> `/media/tv-series:ro`
-  - `./data/media/downloads` -> `/media/downloads:ro`
-- `MEDIA_MOUNTS` uses container paths, for example `Movies=/media/movies;TV Series=/media/tv-series;Downloads=/media/downloads`.
-
-If you use a domain or Coolify reverse proxy and do not want a direct host port, remove the `7777:8765` mapping and rely on the Coolify proxy configuration.
+Recommended Coolify variables include `APP_DATA_SOURCE=app-data`,
+`APP_PORT=8765`, and host paths for the three `MEDIA_*_SOURCE` variables.
+`MEDIA_MOUNTS` continues to use the fixed container paths. Redis host access is
+bound to loopback only; application traffic uses the private Compose network.
 
 ## Environment Variables
 
 | Variable | Default / example | Description |
 | --- | --- | --- |
+| `APP_IMAGE` | `batch-video-converter:local` | Image name/tag. Set a pinned GHCR tag when deploying a prebuilt release. |
+| `APP_PORT` | `8765` | Host port mapped to container port 8765. |
+| `APP_DATA_SOURCE` | `./data` | Host data path or the `app-data` named volume. |
+| `MEDIA_MOVIES_SOURCE` | `./media/movies` | Host path mounted read-only at `/media/movies`. |
+| `MEDIA_SERIES_SOURCE` | `./media/series` | Host path mounted read-only at `/media/series`. |
+| `MEDIA_DOWNLOADS_SOURCE` | `./media/downloads` | Host path mounted read-only at `/media/downloads`. |
+| `V4L2_DEVICE` | `/dev/null` | Set to `/dev/video11` only on Raspberry Pi 4. |
 | `VIDEO_CONVERTER_STORAGE` | `redis` | Storage backend. Use `redis` for Docker/production and `local` for single-machine development. |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL when `VIDEO_CONVERTER_STORAGE=redis`. Local Redis usually uses `redis://localhost:6380/0`. |
 | `DATA_ROOT` | `/data` | Writable application root. The app creates `input`, `outputs`, `temp`, `logs`, and `data` under it. |
@@ -280,7 +295,7 @@ If you use a domain or Coolify reverse proxy and do not want a direct host port,
 Important rules:
 
 - `MEDIA_MOUNTS` paths are container paths, not host paths.
-- Each `MEDIA_MOUNTS` path must match a volume mount in both the `api` and `worker` services.
+- Each `MEDIA_MOUNTS` path must match a read-only mount on the combined `app` service.
 - Source media mounts should be read-only (`:ro`).
 - Runtime output, logs, temp files, and local SQLite data belong under `DATA_ROOT`.
 
@@ -449,10 +464,8 @@ docker compose up --build
 .
 |-- AGENTS.md                         # Developer/agent project guide
 |-- Dockerfile                        # Multi-stage frontend + backend image
-|-- docker-compose.yml                # Local Docker Compose stack
-|-- docker-compose.coolify.yml        # Coolify-oriented Compose stack
-|-- .env.example                      # Local/Docker environment template
-|-- .env.coolify.example              # Coolify environment template
+|-- docker-compose.yml                # Unified local/Coolify/Pi stack
+|-- .env.example                      # Unified deployment environment template
 |-- pyproject.toml                    # Python tool config for Black and Ruff
 |-- pytest.ini                        # pytest config with pythonpath=src
 |-- requirements.txt                  # Runtime Python dependencies
@@ -489,7 +502,7 @@ docker compose up --build
 
 ## Troubleshooting
 
-- UI opens but media roots are empty: verify `MEDIA_MOUNTS` and the matching Docker volume lines for both `api` and `worker`.
+- UI opens but media roots are empty: verify `MEDIA_MOUNTS` and the matching `MEDIA_*_SOURCE` host paths.
 - `GET /health/ready` returns 503: Redis is unavailable or `REDIS_URL` is wrong when using `VIDEO_CONVERTER_STORAGE=redis`.
 - Local run complains about Redis: use default local storage or run `python run_local.py --storage local`; only `--storage redis` requires a local Redis-compatible service.
 - Jobs stay queued: check that the worker service/process is running and can reach the same Redis/local store and media mounts as the API.
@@ -498,4 +511,4 @@ docker compose up --build
 - WebM with `audio_export=copy` behaves differently: the worker normalizes WebM output for container compatibility and may fall back to Opus.
 - Built UI is missing locally: run `cd frontend && npm run build` or use the Vite dev server while the API runs separately.
 - Docker build fails in frontend stage: run `cd frontend && npm install && npm run build` locally to see TypeScript/Vite errors.
-- Coolify cannot route the app: ensure public service is `api`, container port is `8765`, compose file is `docker-compose.coolify.yml`, and healthcheck path is `/health/ready`.
+- Coolify cannot route the app: ensure public service is `app`, container port is `8765`, compose file is `docker-compose.yml`, and healthcheck path is `/health/ready`.

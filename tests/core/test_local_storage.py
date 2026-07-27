@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 
 import pytest
 
-from video_converter.core.storage import LocalFileStore
+from video_converter.core.storage import LocalFileStore, StorageError
 
 
 def test_local_file_store_persists_values_and_lists_across_instances(tmp_path) -> None:
@@ -70,6 +71,28 @@ def test_local_file_store_lrem_delete_and_expiry(tmp_path) -> None:
     assert store.set("job:2", "payload") is True
     assert store.delete("job:2") == 1
     assert store.get("job:2") is None
+
+
+def test_local_file_store_set_nx_and_compare_and_set_are_atomic(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+
+    assert store.set("claim", "first", nx=True) is True
+    assert store.set("claim", "second", nx=True) is False
+    assert store.get("claim") == "first"
+    assert store.compare_and_set("claim", "stale", "third") is False
+    assert store.compare_and_set("claim", "first", "third") is True
+    assert store.get("claim") == "third"
+
+
+def test_local_file_store_translates_sqlite_failures(monkeypatch, tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+
+    def fail_connect():
+        raise sqlite3.OperationalError("database unavailable")
+
+    monkeypatch.setattr(store, "_connect", fail_connect)
+    with pytest.raises(StorageError, match="database unavailable"):
+        store.get("claim")
 
 
 def test_local_file_store_sets_are_unique_and_pipeline_safe(tmp_path) -> None:

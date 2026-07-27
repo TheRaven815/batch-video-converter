@@ -1,8 +1,8 @@
-import { Fragment, useMemo } from 'react';
-import { FileVideo, Folder, Play, Search, Trash2 } from 'lucide-react';
+import { Fragment, useMemo, useState } from 'react';
+import { FileVideo, Folder, Play, Search, Trash2, Upload } from 'lucide-react';
 import { useLocation } from 'wouter';
 
-import { probeSubtitles } from '../api';
+import { probeSubtitles, uploadMedia } from '../api';
 import { useAppContext } from '../context/AppContext';
 import type { ExportSettings, StagedServerFile } from '../models';
 import { uniqueLanguages } from '../utils/helpers';
@@ -16,6 +16,33 @@ export default function ConvertPage() {
   );
   const subtitleLanguages = useMemo(() => uniqueLanguages(app.staged), [app.staged]);
   const selectedStageCount = app.staged.filter((item) => item.selected).length;
+  const [uploading, setUploading] = useState(false);
+
+  const uploadFiles = async (files: FileList | File[]) => {
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const uploaded = await uploadMedia(file);
+        app.setStaged((current) => [
+          ...current,
+          {
+            id: `upload:${uploaded.input_filename}`,
+            rootKey: '',
+            rootLabel: 'Upload',
+            sourcePath: uploaded.input_filename,
+            name: uploaded.input_filename,
+            selected: true,
+            uploaded: true,
+          },
+        ]);
+      }
+      app.showToast('Upload added to staging.', 'success');
+    } catch (error) {
+      app.showToast(error instanceof Error ? error.message : 'Upload failed.', 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const addSelected = () => {
     const nextItems: StagedServerFile[] = selectedEntries.map((entry) => ({
@@ -76,6 +103,25 @@ export default function ConvertPage() {
       </div>
       <div className="form-panel">
         <span className="form-section-title border-b pb-2">1. Source Browser</span>
+        <label
+          className="upload-dropzone"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            void uploadFiles(event.dataTransfer.files);
+          }}
+        >
+          <Upload size={18} />
+          <span>{uploading ? 'Uploading…' : 'Drop video files here or click to upload'}</span>
+          <input
+            type="file"
+            accept="video/*,.mkv,.m4v"
+            multiple
+            hidden
+            disabled={uploading}
+            onChange={(event) => event.target.files && void uploadFiles(event.target.files)}
+          />
+        </label>
         <div className="browser-controls">
           <select
             className="form-input root-select"
@@ -287,6 +333,129 @@ export default function ConvertPage() {
             options={[
               ['', 'Auto Detect'],
               ...subtitleLanguages.map((language) => [language, language] as [string, string]),
+            ]}
+          />
+          <ExportSelect
+            label="Resolution"
+            value={app.settings.resolution}
+            onChange={(value) =>
+              app.setSettings((current) => ({
+                ...current,
+                resolution: value as ExportSettings['resolution'],
+              }))
+            }
+            options={[
+              ['original', 'Original'],
+              ['1080p', '1080p'],
+              ['720p', '720p'],
+              ['480p', '480p'],
+            ]}
+          />
+          <ExportSelect
+            label="Encoder Preset"
+            value={app.settings.encoder_preset}
+            onChange={(value) =>
+              app.setSettings((current) => ({
+                ...current,
+                encoder_preset: value as ExportSettings['encoder_preset'],
+              }))
+            }
+            options={[
+              ['ultrafast', 'Ultra fast'],
+              ['veryfast', 'Very fast'],
+              ['fast', 'Fast'],
+              ['medium', 'Medium'],
+              ['slow', 'Slow'],
+            ]}
+          />
+          <div className="form-group">
+            <label className="form-label">Quality (CRF)</label>
+            <input
+              className="form-input"
+              type="number"
+              min={0}
+              max={51}
+              value={app.settings.quality_crf}
+              onChange={(event) =>
+                app.setSettings((current) => ({
+                  ...current,
+                  quality_crf: Number(event.target.value),
+                }))
+              }
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Video bitrate (optional)</label>
+            <input
+              className="form-input"
+              placeholder="e.g. 4M"
+              value={app.settings.target_video_bitrate}
+              onChange={(event) =>
+                app.setSettings((current) => ({
+                  ...current,
+                  target_video_bitrate: event.target.value,
+                }))
+              }
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Audio bitrate (kbps)</label>
+            <input
+              className="form-input"
+              type="number"
+              min={32}
+              max={512}
+              value={app.settings.audio_bitrate_kbps}
+              onChange={(event) =>
+                app.setSettings((current) => ({
+                  ...current,
+                  audio_bitrate_kbps: Number(event.target.value),
+                }))
+              }
+            />
+          </div>
+          <ExportSelect
+            label="Hardware Acceleration"
+            value={app.settings.hardware_acceleration}
+            onChange={(value) =>
+              app.setSettings((current) => ({
+                ...current,
+                hardware_acceleration: value as ExportSettings['hardware_acceleration'],
+              }))
+            }
+            options={[
+              ['auto', 'Auto detect'],
+              ['disabled', 'Disabled'],
+              ['v4l2m2m', 'Raspberry Pi V4L2'],
+            ]}
+          />
+          <div className="form-group">
+            <label className="form-label">Retry attempts</label>
+            <input
+              className="form-input"
+              type="number"
+              min={1}
+              max={10}
+              value={app.settings.max_attempts}
+              onChange={(event) =>
+                app.setSettings((current) => ({
+                  ...current,
+                  max_attempts: Number(event.target.value),
+                }))
+              }
+            />
+          </div>
+          <ExportSelect
+            label="Queue Priority"
+            value={String(app.settings.priority)}
+            onChange={(value) =>
+              app.setSettings((current) => ({ ...current, priority: Number(value) }))
+            }
+            options={[
+              ['0', 'Normal'],
+              ['5', 'High'],
+              ['10', 'Urgent'],
+              ['-5', 'Low'],
             ]}
           />
         </div>

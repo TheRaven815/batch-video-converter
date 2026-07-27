@@ -10,20 +10,38 @@ from functools import wraps
 from inspect import isawaitable
 from types import ModuleType
 
-import redis
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from video_converter.api import auth, routes
 from video_converter.api.async_storage import AsyncJobRepository, create_async_storage_client
 from video_converter.api.errors import structured_http_exception_handler
-from video_converter.api.routers import batches, health, jobs, media, outputs, ui
+from video_converter.api.routers import audit, batches, health, jobs, media, outputs, ui
 from video_converter.api.routers import settings as settings_router
 from video_converter.core.config import ensure_runtime_dirs, get_settings
-from video_converter.core.job_repository import DEFAULT_STALE_RUNNING_SECONDS
-from video_converter.core.storage import is_redis_storage
+from video_converter.core.storage import StorageError
 
 logger = logging.getLogger("api")
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s service=api message=%(message)s",
+    )
+
+
+async def storage_error_handler(_request, exc: StorageError) -> JSONResponse:
+    logger.exception("storage backend failure", exc_info=exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "code": "storage_unavailable",
+                "message": "Storage backend unavailable",
+                "recoverable": True,
+            }
+        },
+    )
 
 
 @asynccontextmanager
@@ -35,7 +53,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if has_injected_runtime:
         configured_settings = routes.settings
         storage = routes.storage_client
-        repository = routes.job_repository
     else:
         configured_settings = get_settings()
         ensure_runtime_dirs(configured_settings)
@@ -44,20 +61,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         routes.configure_runtime(configured_settings, storage, repository)
     if auth._storage_client is None:
         auth.configure_runtime(configured_settings, storage)
-
-    try:
-        recovery = repository.recover_stale_running_jobs(
-            stale_after_seconds=DEFAULT_STALE_RUNNING_SECONDS
-        )
-        recovered = await recovery if isawaitable(recovery) else recovery
-    except redis.RedisError:
-        logger.exception("stale job recovery failed")
-    except Exception:
-        if is_redis_storage(storage):
-            logger.exception("stale job recovery failed")
-    else:
-        if recovered:
-            logger.info("recovered %s stale running jobs", len(recovered))
 
     try:
         yield
@@ -72,6 +75,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     application = FastAPI(title="Video Converter API", version="0.1.0", lifespan=lifespan)
     application.add_exception_handler(HTTPException, structured_http_exception_handler)
+    application.add_exception_handler(StorageError, storage_error_handler)
     application.include_router(auth.router, prefix="/api/v1")
     for route_group in (
         health.router,
@@ -80,6 +84,7 @@ def create_app() -> FastAPI:
         outputs.router,
         media.router,
         settings_router.router,
+        audit.router,
         ui.router,
     ):
         application.include_router(route_group)

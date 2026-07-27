@@ -25,6 +25,10 @@ class _Pipeline:
         self.commands.append(("rpush", (key, value)))
         return self
 
+    def lpush(self, key: str, value: str) -> "_Pipeline":
+        self.commands.append(("lpush", (key, value)))
+        return self
+
     def lrem(self, key: str, count: int, value: str) -> "_Pipeline":
         self.commands.append(("lrem", (key, count, value)))
         return self
@@ -61,14 +65,18 @@ class _FakeRedis:
             raise api.redis.RedisError("redis unavailable")
         return True
 
-    def pipeline(
-        self, transaction: bool = True
-    ) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
+    def pipeline(self, transaction: bool = True) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
         return _Pipeline(self)
 
     def set(
-        self, key: str, value: str, ex: int | None = None
+        self,
+        key: str,
+        value: str,
+        ex: int | None = None,
+        nx: bool = False,
     ) -> bool:  # noqa: ARG002 - expiration not needed here.
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         return True
 
@@ -77,6 +85,10 @@ class _FakeRedis:
 
     def rpush(self, key: str, value: str) -> int:
         self.lists.setdefault(key, []).append(value)
+        return len(self.lists[key])
+
+    def lpush(self, key: str, value: str) -> int:
+        self.lists.setdefault(key, []).insert(0, value)
         return len(self.lists[key])
 
     def lrange(self, key: str, start: int, end: int) -> list[str]:
@@ -155,6 +167,7 @@ def integration_client(
             "data_dir": data_dir,
             "media_roots": (MediaRoot(key="root", label="Root", path=media_root.resolve()),),
             "worker_concurrency": 1,
+            "max_upload_bytes": 10 * 1024 * 1024,
         },
     )()
 
@@ -166,6 +179,7 @@ def integration_client(
 
     # Override authentication dependency for testing
     api.app.dependency_overrides[api.get_current_user] = lambda: "admin"
+    api.app.dependency_overrides[api.get_stream_user] = lambda: "admin"
     try:
         with TestClient(api.app) as client:
             yield client, fake_redis, media_root
@@ -360,8 +374,8 @@ def test_batch_job_creation_returns_valid_jobs_and_partial_failures(
         json={"jobs": [{"source_root_key": "root", "source_path": "valid.mp4"}]},
         headers={"Idempotency-Key": "mixed-batch"},
     )
-    assert cached_response.status_code == 201
-    assert cached_response.json()["jobs"][0]["id"] == payload["jobs"][0]["id"]
+    assert cached_response.status_code == 422
+    assert "different payload" in cached_response.json()["error"]["message"]
     assert fake_redis.lists[QUEUE_NAME] == [payload["jobs"][0]["id"]]
 
 
@@ -460,7 +474,7 @@ def test_bulk_actions_start_cancel_and_delete(
     cancel_payload = cancel_response.json()
     updated_by_id = {job["id"]: job for job in cancel_payload["updated"]}
     assert updated_by_id["queued-1"]["status"] == "cancelled"
-    assert updated_by_id["completed-1"]["status"] == "completed"
+    assert "completed-1" not in updated_by_id
     assert {item["job_id"] for item in cancel_payload["skipped"]} == {"completed-1", "missing"}
     assert "queued-1" not in fake_redis.lists[QUEUE_NAME]
 
@@ -474,3 +488,72 @@ def test_bulk_actions_start_cancel_and_delete(
     assert {item["job_id"] for item in delete_payload["skipped"]} == {"running-1", "missing"}
     assert "completed-1" not in fake_redis.lists[JOBS_INDEX_KEY]
     assert f"{JOB_KEY_PREFIX}completed-1" not in fake_redis.values
+
+
+def test_p5_job_options_upload_and_individual_output_delete(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
+    client, _fake_redis, _media_root = integration_client
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "input_filename": "uploaded.mp4",
+            "quality_crf": 19,
+            "target_video_bitrate": "4M",
+            "audio_bitrate_kbps": 192,
+            "resolution": "1080p",
+            "encoder_preset": "slow",
+            "hardware_acceleration": "auto",
+            "max_attempts": 4,
+            "priority": 5,
+        },
+    )
+    assert create_response.status_code == 201
+    record = create_response.json()
+    assert record["quality_crf"] == 19
+    assert record["resolution"] == "1080p"
+    assert record["max_attempts"] == 4
+    assert record["priority"] == 5
+
+    upload_response = client.post(
+        "/api/v1/media/uploads",
+        files={"file": ("clip.mp4", b"fake-video", "video/mp4")},
+    )
+    assert upload_response.status_code == 201
+    assert upload_response.json()["input_filename"].endswith(".mp4")
+
+    output_path = api.settings.outputs_dir / "converted.mp4"
+    output_path.write_bytes(b"output")
+    preview_response = client.get(
+        "/api/v1/outputs/converted.mp4/preview",
+        headers={"Range": "bytes=1-3"},
+    )
+    assert preview_response.status_code == 206
+    assert preview_response.headers["accept-ranges"] == "bytes"
+    assert preview_response.headers["content-range"] == "bytes 1-3/6"
+    assert preview_response.content == b"utp"
+
+    delete_response = client.delete("/api/v1/outputs/converted.mp4")
+    assert delete_response.status_code == 200
+    assert not output_path.exists()
+
+
+def test_batch_retry_endpoint_requeues_failed_jobs(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
+    client, fake_redis, _media_root = integration_client
+    failed = _make_job("batch-failed", JobStatus.failed)
+    failed.batch_id = "batch-p5"
+    completed = _make_job("batch-done", JobStatus.completed)
+    completed.batch_id = "batch-p5"
+    _persist_records(fake_redis, [failed, completed])
+
+    response = client.post("/api/v1/batches/batch-p5/retry")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["batch_id"] == "batch-p5"
+    assert {job["id"] for job in payload["result"]["updated"]} == {
+        "batch-failed",
+        "batch-done",
+    }

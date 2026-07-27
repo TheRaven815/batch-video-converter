@@ -7,6 +7,9 @@ export type ExportProfile = Schemas['ExportProfile'];
 export type VideoExport = Schemas['VideoExport'];
 export type AudioExport = Schemas['AudioExport'];
 export type SubtitleExport = Schemas['SubtitleExport'];
+export type VideoResolution = Schemas['VideoResolution'];
+export type EncoderPreset = Schemas['EncoderPreset'];
+export type HardwareAcceleration = Schemas['HardwareAcceleration'];
 export type HealthResponse = Schemas['HealthResponse'];
 export type WorkerHealthResponse = Schemas['WorkerHealthResponse'];
 export type JobCreateRequest = Schemas['JobCreateRequest'];
@@ -15,6 +18,7 @@ export type JobValidationItem = Schemas['JobValidationItem'];
 export type JobValidationResponse = Schemas['JobValidationResponse'];
 export type BatchSummaryDto = Schemas['BatchSummaryDto'];
 export type BatchListResponse = Schemas['BatchListResponse'];
+export type BatchActionResponse = Schemas['BatchActionResponse'];
 export type ErrorEnvelope = Omit<Schemas['ErrorEnvelope'], 'details'> & {
   details?: Record<string, unknown> | null;
 };
@@ -40,14 +44,24 @@ export type MediaSubtitleTrackDto = Schemas['MediaSubtitleTrackDto'];
 export type MediaSubtitleProbeResponse = Schemas['MediaSubtitleProbeResponse'];
 export type OutputFileDto = Schemas['OutputFileDto'];
 export type OutputListResponse = Schemas['OutputListResponse'];
+export type UploadResponse = Schemas['UploadResponse'];
+export type AuditEventDto = Schemas['AuditEventDto'];
 
 type ApiJobRecord = Schemas['JobRecord'];
-export type JobRecord = Omit<ApiJobRecord, 'timeline'> & {
+export type JobRecord = Omit<ApiJobRecord, 'timeline' | 'telemetry_history'> & {
   timeline?: Array<{
     at?: string;
     status?: JobStatus;
     phase?: string;
     message?: string | null;
+  }>;
+  telemetry_history?: Array<{
+    at?: string;
+    fps?: number | null;
+    speed?: string | null;
+    bitrate?: string | null;
+    out_time_seconds?: number | null;
+    progress_percent?: number | null;
   }>;
 };
 
@@ -67,6 +81,7 @@ export interface StagedServerFile {
   subtitleTrackCount?: number;
   subtitleLanguages?: string[];
   subtitleProbeStatus?: 'idle' | 'loading' | 'done' | 'error';
+  uploaded?: boolean;
 }
 
 export interface ExportSettings {
@@ -74,6 +89,14 @@ export interface ExportSettings {
   audio_export: AudioExport;
   subtitle_export: SubtitleExport;
   subtitle_language: string;
+  quality_crf: number;
+  target_video_bitrate: string;
+  audio_bitrate_kbps: number;
+  resolution: VideoResolution;
+  encoder_preset: EncoderPreset;
+  hardware_acceleration: HardwareAcceleration;
+  max_attempts: number;
+  priority: number;
 }
 
 export interface JobFilters {
@@ -99,4 +122,6 @@ export type SystemSettings = Omit<
   default_export: DefaultExportSettings;
   auto_cleanup: AutoCleanupSettings;
   ui: UiPreferences;
+  retry?: Schemas['RetrySettings'] | null;
+  disk_safety?: Schemas['DiskSafetySettings'] | null;
 };

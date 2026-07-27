@@ -28,7 +28,7 @@ Main capabilities:
 - `frontend/src/components/ui.tsx`: Shared UI components.
 - `frontend/src/utils/constants.ts` and `frontend/src/utils/helpers.ts`: Constants, default export settings, filtering/sorting/format helpers.
 - `tests/`: pytest package split into `api`, `core`, and `worker` subgroups.
-- `Dockerfile`, `docker-compose.yml`, `docker-compose.coolify.yml`, `.env.example`, `.env.coolify.example`: Build/deploy and environment contract.
+- `Dockerfile`, `docker-compose.yml`, `.env.example`: Unified local/Coolify/Raspberry Pi build and deployment contract.
 - `run_local.py`: Local launcher that starts the API and worker from the same terminal without Docker.
 
 ## Technology Stack
@@ -214,11 +214,11 @@ When changing the API contract:
 - `Dockerfile` has two stages: `node:22-slim` builds the frontend, and `python:3.11-slim` creates the final runtime image.
 - The final image ships with defaults `PYTHONPATH=/app/src`, `VIDEO_CONVERTER_STORAGE=redis`, and `DATA_ROOT=/data`.
 - FFmpeg is installed into the final image via apt; without FFmpeg, the worker cannot perform real conversions.
-- `docker-compose.yml` is for local development; the `app` service runs both API and worker via `entrypoint.sh`, exposes `8765:8765`; Redis exposes `6380:6379`.
-- `docker-compose.coolify.yml` is for Coolify; example public port is `7777:8765`, health check is `/health/ready`, and it has `app-data` and `redis-data` named volumes.
-- In Coolify, the public service must be `app`, the container port must be `8765`, and the compose file must be `docker-compose.coolify.yml`.
+- `docker-compose.yml` is the only Compose file and supports local, Coolify/Portainer, VPS, and Raspberry Pi deployments through `.env` variables.
+- The `app` service runs both API and worker via `entrypoint.sh`; `APP_PORT` controls the host port and `APP_DATA_SOURCE` accepts either a bind path or the `app-data` named volume.
+- In Coolify, the public service must be `app`, the container port must be `8765`, and the compose file must be `docker-compose.yml`.
 - Do not expose the Redis host port publicly in production. Keep Redis inside the Docker network/private network.
-- When changing media mounts, update both `MEDIA_MOUNTS` and the `app` service volume lines at the same time.
+- When changing media mounts, update both `MEDIA_MOUNTS` and the corresponding `MEDIA_*_SOURCE` host path.
 - Before increasing the worker replica count, verify FFmpeg resource usage and access to the same volumes.
 
 ## Code Standards
@@ -281,8 +281,8 @@ When writing tests:
 
 ### Adding a New Media Root
 
-1. Append `Label=/container/path` to `MEDIA_MOUNTS` in `.env` or `.env.coolify`.
-2. Add a `:ro` volume for the same container path to the `app` service in `docker-compose.yml` or `docker-compose.coolify.yml`.
+1. Append `Label=/container/path` to `MEDIA_MOUNTS` in `.env`.
+2. Set the corresponding `MEDIA_*_SOURCE` host path used by `docker-compose.yml`.
 3. Verify that the host directory exists and that the container path matches `MEDIA_MOUNTS`.
 4. Check `GET /api/v1/media/roots` and the browse flow in the UI.
 

@@ -118,6 +118,28 @@ def test_list_jobs_accepts_comma_status_and_cursor(monkeypatch: Any) -> None:
     assert [job.id for job in listed] == ["job-3", "job-2"]
 
 
+def test_job_id_cursor_stays_stable_when_a_new_job_is_inserted(monkeypatch: Any) -> None:
+    repository = _FakeJobRepository(["job-1", "job-2", "job-3"])
+    records = {
+        job_id: _make_job(job_id, JobStatus.completed)
+        for job_id in ("job-1", "job-2", "job-3", "job-4")
+    }
+    monkeypatch.setattr(api, "job_repository", repository)
+    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    first_response = Response()
+
+    first_page = api.list_jobs(response=first_response, limit=2)
+    repository._ids.append("job-4")
+    second_page = api.list_jobs(
+        response=Response(),
+        limit=2,
+        cursor=first_response.headers["X-Next-Cursor"],
+    )
+
+    assert [job.id for job in first_page] == ["job-3", "job-2"]
+    assert [job.id for job in second_page] == ["job-1"]
+
+
 def test_list_jobs_filters_by_q_profile_root_and_date(monkeypatch: Any) -> None:
     ordered_ids = ["job-1", "job-2", "job-3"]
     records = {

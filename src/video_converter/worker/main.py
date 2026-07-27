@@ -3,19 +3,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import redis
 
-from video_converter.core.config import ensure_runtime_dirs, get_settings
+from video_converter.core.config import WORKER_HEARTBEAT_KEY, ensure_runtime_dirs, get_settings
 from video_converter.core.job_repository import DEFAULT_STALE_RUNNING_SECONDS, JobRepository
-from video_converter.core.models import JobStatus
+from video_converter.core.models import JobStatus, now_iso
 from video_converter.core.path_validation import validate_source_path
 from video_converter.core.storage import create_storage_client, is_redis_storage
 
@@ -30,6 +32,17 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s service=worker job_id=%(job_id)s message=%(message)s",
 )
 logger = logging.getLogger("worker")
+
+
+class _JobIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "job_id"):
+            record.job_id = "-"
+        return True
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_JobIdFilter())
 
 
 class JobAdapter(logging.LoggerAdapter):
@@ -47,9 +60,8 @@ class JobAdapter(logging.LoggerAdapter):
 class _ShutdownManager:
     """Tracks active FFmpeg processes and in-progress job IDs for graceful shutdown.
 
-    When a SIGTERM/SIGINT signal arrives the manager can quickly terminate all
-    running FFmpeg subprocesses and mark any still-running jobs as ``failed``
-    so they do not remain stuck in ``running`` status in Redis.
+    When a SIGTERM/SIGINT signal arrives the manager quickly terminates active
+    FFmpeg subprocesses and requeues interrupted work for the next worker.
     """
 
     def __init__(self) -> None:
@@ -127,8 +139,8 @@ class _ShutdownManager:
                 except OSError:
                     pass
 
-    def fail_active_jobs(self, message: str = "Worker shutdown during processing") -> None:
-        """Mark every job still tracked as active whose Redis status is *running* as *failed*."""
+    def requeue_active_jobs(self, message: str = "Worker shutdown; job requeued") -> None:
+        """Return interrupted work to the queue during a routine shutdown."""
         with self._lock:
             job_ids = list(self._active_job_ids)
 
@@ -136,27 +148,16 @@ class _ShutdownManager:
             try:
                 record = job_repository.get(job_id)
                 if record is not None and record.status == JobStatus.running:
-                    job_repository.update_status(
-                        job_id,
-                        JobStatus.failed,
-                        progress_percent=record.progress_percent,
-                        progress_phase="failed",
-                        progress_message=message,
-                        error=message,
-                    )
-                    logger.info(
-                        "marked running job as failed due to shutdown", extra={"job_id": job_id}
-                    )
+                    _requeue_after_shutdown(record, message)
+                    logger.info("requeued running job during shutdown", extra={"job_id": job_id})
             except Exception:
-                logger.exception(
-                    "could not mark job as failed during shutdown", extra={"job_id": job_id}
-                )
+                logger.exception("could not requeue job during shutdown", extra={"job_id": job_id})
 
     def graceful_shutdown(self, proc_timeout: float = 5.0) -> None:
-        """Full graceful-shutdown sequence: terminate FFmpeg → fail remaining jobs."""
+        """Full graceful-shutdown sequence: terminate FFmpeg → requeue work."""
         self._shutdown_requested.set()
         self.terminate_active_procs(timeout=proc_timeout)
-        self.fail_active_jobs()
+        self.requeue_active_jobs()
 
 
 _shutdown = _ShutdownManager()
@@ -337,6 +338,45 @@ def _probe_video_codec(input_path: Path) -> str | None:
     return codec or None
 
 
+def _probe_audio_codec(input_path: Path) -> str | None:
+    payload = _run_ffprobe_json(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "json",
+            str(input_path),
+        ]
+    )
+    if payload is None:
+        return None
+    streams = payload.get("streams")
+    if not isinstance(streams, list) or not streams or not isinstance(streams[0], dict):
+        return None
+    codec = str(streams[0].get("codec_name") or "").strip().lower()
+    return codec or None
+
+
+def _audio_copy_fallback(
+    audio_export: str,
+    video_export: str,
+    audio_codec: str | None,
+) -> str:
+    """Return a container-safe audio mode without changing explicit encodes."""
+    if (
+        audio_export == "copy"
+        and video_export == "mp4"
+        and audio_codec not in {"aac", "mp3", "ac3", "eac3", "alac"}
+    ):
+        return "aac"
+    return audio_export
+
+
 def _subtitle_codec_for_container(output_path: Path) -> str:
     suffix = output_path.suffix.lower()
     if suffix == ".mp4":
@@ -357,17 +397,40 @@ def _ffmpeg_command(
     *,
     prefer_stream_copy_video: bool = False,
     ffmpeg_threads: int = 1,
+    quality_crf: int | None = None,
+    target_video_bitrate: str | None = None,
+    audio_bitrate_kbps: int | None = None,
+    resolution: str = "original",
+    encoder_preset: str | None = None,
+    hardware_encoder: str | None = None,
 ) -> list[str]:
     cmd = ["ffmpeg", "-y", "-i", str(input_path)]
 
     if prefer_stream_copy_video:
         cmd.extend(["-c:v", "copy"])
+    elif hardware_encoder == "h264_v4l2m2m":
+        cmd.extend(["-c:v", "h264_v4l2m2m", "-b:v", target_video_bitrate or "4M"])
     elif profile == "h265_mp4":
-        cmd.extend(["-c:v", "libx265", "-preset", "medium", "-crf", "28"])
+        cmd.extend(["-c:v", "libx265", "-preset", encoder_preset or "medium"])
     elif profile == "vp9_webm":
-        cmd.extend(["-c:v", "libvpx-vp9", "-crf", "33", "-b:v", "0"])
+        cmd.extend(["-c:v", "libvpx-vp9", "-row-mt", "1"])
     else:
-        cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"])
+        cmd.extend(["-c:v", "libx264", "-preset", encoder_preset or "veryfast"])
+
+    if not prefer_stream_copy_video and hardware_encoder is None:
+        if target_video_bitrate:
+            cmd.extend(["-b:v", target_video_bitrate])
+        else:
+            default_crf = 33 if profile == "vp9_webm" else 28 if profile == "h265_mp4" else 23
+            crf = default_crf if quality_crf is None else quality_crf
+            cmd.extend(["-crf", str(max(0, min(51, crf)))])
+            if profile == "vp9_webm":
+                cmd.extend(["-b:v", "0"])
+
+    resolution_heights = {"1080p": 1080, "720p": 720, "480p": 480}
+    if resolution in resolution_heights and not prefer_stream_copy_video:
+        height = resolution_heights[resolution]
+        cmd.extend(["-vf", f"scale=-2:'min({height},ih)'"])
 
     # Bound each encoder independently so concurrent jobs cannot each consume
     # every CPU visible to the container.
@@ -376,11 +439,11 @@ def _ffmpeg_command(
     if audio_export == "copy":
         cmd.extend(["-c:a", "copy"])
     elif audio_export == "aac":
-        cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+        cmd.extend(["-c:a", "aac", "-b:a", f"{audio_bitrate_kbps or 128}k"])
     elif audio_export == "mp3":
         cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k"])
     elif audio_export == "opus":
-        cmd.extend(["-c:a", "libopus", "-b:a", "96k"])
+        cmd.extend(["-c:a", "libopus", "-b:a", f"{audio_bitrate_kbps or 96}k"])
     else:
         cmd.extend(["-c:a", "aac", "-b:a", "128k"])
 
@@ -486,6 +549,16 @@ def _is_cancel_requested(job_id: str) -> bool:
     return bool(record and record.cancel_requested)
 
 
+def _minimum_free_disk_bytes() -> int:
+    configured = _runtime_settings().get("disk_safety", {})
+    if isinstance(configured, dict):
+        try:
+            return max(0, int(configured.get("minimum_free_bytes", settings.min_free_disk_bytes)))
+        except (TypeError, ValueError):
+            pass
+    return settings.min_free_disk_bytes
+
+
 def _run_ffmpeg_with_progress(
     job_id: str,
     cmd: list[str],
@@ -510,10 +583,17 @@ def _run_ffmpeg_with_progress(
         )
 
     stderr_lines: list[str] = []
+    log_path = settings.logs_dir / f"{job_id}.ffmpeg.log"
+    last_progress = {"at": time.monotonic()}
+    disk_exhausted = {"value": False}
 
     def _read_stderr() -> None:
-        if proc.stderr:
+        if not proc.stderr:
+            return
+        with log_path.open("a", encoding="utf-8", errors="replace") as log_file:
             for raw_line in proc.stderr:
+                log_file.write(raw_line)
+                log_file.flush()
                 stderr_lines.append(raw_line)
                 if len(stderr_lines) > 50:
                     stderr_lines.pop(0)
@@ -544,6 +624,22 @@ def _run_ffmpeg_with_progress(
                 except OSError:
                     pass
                 return
+            if time.monotonic() - last_progress["at"] > settings.ffmpeg_stall_timeout_seconds:
+                stderr_lines.append(
+                    f"FFmpeg stalled for more than {settings.ffmpeg_stall_timeout_seconds}s\n"
+                )
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
+                return
+            if shutil.disk_usage(settings.data_root).free < _minimum_free_disk_bytes():
+                disk_exhausted["value"] = True
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
+                return
             time.sleep(0.35)
 
     watcher = threading.Thread(target=_cancel_watcher, daemon=True)
@@ -561,6 +657,7 @@ def _run_ffmpeg_with_progress(
                 snapshot[key.strip()] = value.strip()
 
             if snapshot.get("progress") == "continue":
+                last_progress["at"] = time.monotonic()
                 processed_seconds = _parse_ffmpeg_out_time_seconds(snapshot)
                 telemetry: dict[str, Any] = {
                     "progress_fps": _safe_float(snapshot.get("fps")),
@@ -607,7 +704,13 @@ def _run_ffmpeg_with_progress(
         stderr_thread.join(timeout=2)
         stderr_text = "".join(stderr_lines)
 
-        if cancelled_flag["value"] or _is_cancel_requested(job_id):
+        # Once FFmpeg has successfully finalized the container, completion
+        # wins over a cancellation request arriving in the tiny post-exit gap.
+        if proc.returncode == 0:
+            return 0, stderr_text
+        if disk_exhausted["value"]:
+            return 28, (stderr_text or "Insufficient free disk space")
+        if cancelled_flag["value"]:
             return 130, (stderr_text or "cancelled")
 
         return proc.returncode or 0, (stderr_text or "")
@@ -665,7 +768,7 @@ def process_job(job_id: str) -> None:
     job_logger = JobAdapter(logger, {"job_id": job_id})
     job_logger.info("picked from queue")
 
-    # Track this job so the shutdown manager can mark it as failed
+    # Track this job so routine shutdown can safely return it to the queue.
     _shutdown.register_job(job_id)
 
     try:
@@ -702,6 +805,13 @@ def process_job(job_id: str) -> None:
                 _resolve_export_options(data)
             )
             output_path = _build_output_path(input_path, video_export, job_id)
+            disk = shutil.disk_usage(settings.data_root)
+            minimum_free = max(_minimum_free_disk_bytes(), input_path.stat().st_size)
+            if disk.free < minimum_free:
+                raise RuntimeError(
+                    f"Insufficient free disk space: {disk.free} bytes available, "
+                    f"{minimum_free} bytes required"
+                )
             output_path.parent.mkdir(parents=True, exist_ok=True)
             # Transcode into the temp dir and move into outputs/ only on
             # success, so partial files are never listed or downloadable.
@@ -731,6 +841,27 @@ def process_job(job_id: str) -> None:
                 and video_export in {"mp4", "mkv"}
                 and _probe_video_codec(input_path) == "h264"
             )
+            hardware_request = str(data.get("hardware_acceleration") or "auto")
+            hardware_encoder = (
+                "h264_v4l2m2m"
+                if hardware_request != "disabled"
+                and profile == "h264_mp4"
+                and "h264_v4l2m2m" in _hardware_encoders
+                else None
+            )
+            current_record = job_repository.get(job_id)
+            if current_record is not None:
+                current_record.hardware_acceleration_used = hardware_encoder
+                job_repository.persist(current_record)
+            if audio_export == "copy" and video_export == "mp4":
+                audio_codec = _probe_audio_codec(input_path)
+                safe_audio_export = _audio_copy_fallback(audio_export, video_export, audio_codec)
+                if safe_audio_export != audio_export:
+                    job_logger.warning(
+                        "audio codec %s is not MP4-safe; falling back to AAC",
+                        audio_codec or "unknown",
+                    )
+                    audio_export = safe_audio_export
             try:
                 cmd = _ffmpeg_command(
                     input_path,
@@ -742,6 +873,12 @@ def process_job(job_id: str) -> None:
                     subtitle_language,
                     prefer_stream_copy_video=prefer_stream_copy_video,
                     ffmpeg_threads=settings.ffmpeg_threads,
+                    quality_crf=int(data.get("quality_crf") or 23),
+                    target_video_bitrate=data.get("target_video_bitrate"),
+                    audio_bitrate_kbps=int(data.get("audio_bitrate_kbps") or 128),
+                    resolution=str(data.get("resolution") or "original"),
+                    encoder_preset=str(data.get("encoder_preset") or "veryfast"),
+                    hardware_encoder=hardware_encoder,
                 )
                 return_code, stderr_text = _run_ffmpeg_with_progress(
                     job_id, cmd, duration_seconds=duration_seconds
@@ -771,6 +908,12 @@ def process_job(job_id: str) -> None:
                         subtitle_language,
                         prefer_stream_copy_video=False,
                         ffmpeg_threads=settings.ffmpeg_threads,
+                        quality_crf=int(data.get("quality_crf") or 23),
+                        target_video_bitrate=data.get("target_video_bitrate"),
+                        audio_bitrate_kbps=int(data.get("audio_bitrate_kbps") or 128),
+                        resolution=str(data.get("resolution") or "original"),
+                        encoder_preset=str(data.get("encoder_preset") or "veryfast"),
+                        hardware_encoder=hardware_encoder,
                     )
                     return_code, stderr_text = _run_ffmpeg_with_progress(
                         job_id, fallback_cmd, duration_seconds=duration_seconds
@@ -779,15 +922,10 @@ def process_job(job_id: str) -> None:
                 if return_code == 130:
                     # Distinguish between cancel and shutdown
                     if _shutdown.is_shutting_down and not _is_cancel_requested(job_id):
-                        job_repository.update_status(
-                            job_id,
-                            JobStatus.failed,
-                            progress_percent=None,
-                            progress_phase="failed",
-                            progress_message="Worker shutdown during processing",
-                            error="Worker shutdown during processing",
-                        )
-                        job_logger.info("status set to failed (worker shutdown)")
+                        current = job_repository.get(job_id)
+                        if current is not None:
+                            _requeue_after_shutdown(current, "Worker shutdown; job requeued")
+                        job_logger.info("job requeued after worker shutdown")
                         return
                     if _is_cancel_requested(job_id):
                         job_repository.update_status(
@@ -853,15 +991,33 @@ def process_job(job_id: str) -> None:
                 temp_output_path.unlink(missing_ok=True)
                 temp_subtitle_path.unlink(missing_ok=True)
         except Exception as exc:  # noqa: BLE001
-            job_repository.update_status(
-                job_id,
-                JobStatus.failed,
-                progress_percent=100,
-                progress_phase="failed",
-                progress_message="Conversion failed",
-                error=str(exc),
+            current = job_repository.get(job_id)
+            retry_settings = _runtime_settings().get("retry", {})
+            retry_enabled = bool(retry_settings.get("enabled", True))
+            max_attempts = int(
+                (current.max_attempts if current else 3) or retry_settings.get("max_attempts", 3)
             )
-            job_logger.exception("status set to failed")
+            if (
+                current is not None
+                and retry_enabled
+                and current.attempt_count < max_attempts
+                and _is_transient_failure(str(exc))
+            ):
+                initial = max(1, int(retry_settings.get("initial_backoff_seconds", 10)))
+                maximum = max(initial, int(retry_settings.get("max_backoff_seconds", 300)))
+                delay = min(maximum, initial * (2 ** max(0, current.attempt_count - 1)))
+                job_repository.schedule_retry(current, delay_seconds=delay, reason=str(exc))
+                job_logger.warning("transient failure; retry scheduled in %ss", delay)
+            else:
+                job_repository.update_status(
+                    job_id,
+                    JobStatus.failed,
+                    progress_percent=None,
+                    progress_phase="failed",
+                    progress_message="Conversion failed",
+                    error=str(exc),
+                )
+                job_logger.exception("status set to failed")
     finally:
         _shutdown.unregister_job(job_id)
         try:
@@ -875,14 +1031,55 @@ def _get_dynamic_concurrency() -> int:
         raw = storage_client.get("system:settings")
         if raw:
             data = json.loads(raw)
-            return int(data.get("worker_concurrency", settings.worker_concurrency))
+            return max(
+                1,
+                min(8, int(data.get("worker_concurrency", settings.worker_concurrency))),
+            )
     except Exception:
         pass
-    return settings.worker_concurrency
+    return max(1, min(8, settings.worker_concurrency))
+
+
+def _requeue_after_shutdown(record: Any, message: str) -> None:
+    now = now_iso()
+    record.status = JobStatus.queued
+    record.cancel_requested = False
+    record.progress_phase = "queued"
+    record.progress_message = message
+    record.progress_updated_at = now
+    record.updated_at = now
+    record.finished_at = None
+    job_repository.requeue_existing(record)
 
 
 _PERIODIC_RECOVERY_INTERVAL_SECONDS = 600
 _OUTPUT_CLEANUP_INTERVAL_SECONDS = 60 * 60
+
+
+def _runtime_settings() -> dict[str, Any]:
+    try:
+        raw = storage_client.get("system:settings")
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _is_transient_failure(message: str) -> bool:
+    normalized = message.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "temporarily unavailable",
+            "resource busy",
+            "connection reset",
+            "input/output error",
+            "timed out",
+            "timeout",
+            "network is unreachable",
+            "stalled",
+        )
+    )
 
 
 def _cleanup_outputs(
@@ -923,7 +1120,33 @@ def _cleanup_outputs(
             deleted += 1
         except OSError:
             logger.exception("failed to delete expired output %s", path, extra={"job_id": "-"})
+    if cleanup.get("delete_terminal_jobs") is not False:
+        job_days = max(1, min(3650, int(cleanup.get("job_retention_days") or 90)))
+        cutoff_datetime = datetime.now(timezone.utc) - timedelta(days=job_days)
+        deleted += job_repository.delete_terminal_before(cutoff_datetime)
     return deleted
+
+
+def _probe_hardware_encoders() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    supported = []
+    device_available = any(Path("/dev").glob("video*"))
+    for encoder in ("h264_v4l2m2m", "hevc_v4l2m2m"):
+        if device_available and encoder in result.stdout:
+            supported.append(encoder)
+    return supported
+
+
+_hardware_encoders = _probe_hardware_encoders()
 
 
 def _run_concurrent(max_pool_size: int) -> None:
@@ -931,9 +1154,24 @@ def _run_concurrent(max_pool_size: int) -> None:
     active_futures: dict[Future[None], str] = {}
     last_recovery = time.monotonic()
     last_cleanup = 0.0
+    last_heartbeat = 0.0
 
     with ThreadPoolExecutor(max_workers=max_pool_size, thread_name_prefix="job") as executor:
         while not _shutdown.is_shutting_down:
+            if time.monotonic() - last_heartbeat >= 5:
+                last_heartbeat = time.monotonic()
+                storage_client.set(
+                    WORKER_HEARTBEAT_KEY,
+                    json.dumps(
+                        {
+                            "timestamp": time.time(),
+                            "hardware_encoders": _hardware_encoders,
+                            "active_jobs": len(active_futures),
+                        }
+                    ),
+                    ex=30,
+                )
+                job_repository.requeue_due_retries()
             # Reap completed futures to free tracking slots
             for future in [f for f in active_futures if f.done()]:
                 jid = active_futures.pop(future)

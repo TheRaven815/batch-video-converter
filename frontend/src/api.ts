@@ -1,5 +1,6 @@
 import type {
   BatchListResponse,
+  BatchActionResponse,
   HealthResponse,
   JobBatchCreateResponse,
   JobBulkActionResponse,
@@ -14,6 +15,7 @@ import type {
   StructuredErrorResponse,
   WorkerHealthResponse,
   SystemSettings,
+  UploadResponse,
 } from './models';
 
 let authToken: string | null = localStorage.getItem('video-converter-auth-token');
@@ -48,7 +50,7 @@ function extractErrorMessage(text: string): string | null {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set('Accept', 'application/json');
-  if (init?.body && !headers.has('Content-Type')) {
+  if (init?.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -183,6 +185,15 @@ export async function listBatches(limit = 50): Promise<BatchListResponse> {
   return request<BatchListResponse>(`/api/v1/batches?${params.toString()}`);
 }
 
+export async function actOnBatch(
+  batchId: string,
+  action: 'cancel' | 'retry' | 'archive' | 'delete',
+): Promise<BatchActionResponse> {
+  return request<BatchActionResponse>(`/api/v1/batches/${encodeURIComponent(batchId)}/${action}`, {
+    method: 'POST',
+  });
+}
+
 export async function bulkArchive(jobIds: string[]): Promise<JobBulkActionResponse> {
   return request<JobBulkActionResponse>('/api/v1/jobs/bulk/archive', {
     method: 'POST',
@@ -205,6 +216,38 @@ export async function listOutputs(limit = 50, cursor?: string | null): Promise<O
 
 export async function clearOutputs(): Promise<{ deleted: number }> {
   return request<{ deleted: number }>('/api/v1/outputs', { method: 'DELETE' });
+}
+
+export async function deleteOutput(filename: string): Promise<void> {
+  await request<{ deleted: string }>(`/api/v1/outputs/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function uploadMedia(file: File): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return request<UploadResponse>('/api/v1/media/uploads', { method: 'POST', body: form });
+}
+
+export async function getProtectedMediaUrl(path: string): Promise<string> {
+  const ticket = await getStreamTicket();
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}ticket=${encodeURIComponent(ticket)}`;
+}
+
+export async function downloadJobLog(jobId: string): Promise<void> {
+  const headers = new Headers();
+  if (authToken) headers.set('Authorization', `Bearer ${authToken}`);
+  const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/log`, { headers });
+  if (!response.ok) throw new Error(`Log download failed with ${response.status}`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${jobId}.ffmpeg.log`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function downloadOutput(filename: string): Promise<void> {

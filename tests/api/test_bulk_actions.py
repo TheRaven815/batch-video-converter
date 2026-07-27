@@ -129,7 +129,7 @@ def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
     payload = JobIdsRequest(job_ids=["queued-1", "done-1", "missing"])
     result = api.cancel_jobs_bulk(payload)
 
-    assert {item.id for item in result.updated} == {"queued-1", "done-1"}
+    assert {item.id for item in result.updated} == {"queued-1"}
     assert records["queued-1"].status == JobStatus.cancelled
     assert records["queued-1"].progress_phase == "cancelled"
 

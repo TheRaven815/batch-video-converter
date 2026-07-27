@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import mimetypes
+import os
+import shutil
 import subprocess
 import time
 import uuid
@@ -14,13 +18,32 @@ from typing import Annotated, Any
 
 import psutil
 import redis
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from video_converter.api.auth import get_current_user, get_stream_user
 from video_converter.api.errors import error_code, path_validation_error
-from video_converter.core.config import JOB_EVENTS_CHANNEL, QUEUE_NAME, Settings
+from video_converter.core.config import (
+    HIGH_PRIORITY_QUEUE_NAME,
+    JOB_EVENTS_CHANNEL,
+    LOW_PRIORITY_QUEUE_NAME,
+    QUEUE_NAME,
+    WORKER_HEARTBEAT_KEY,
+    Settings,
+)
 from video_converter.core.models import (
+    AuditEventDto,
+    BatchActionResponse,
     BatchCreateError,
     BatchListResponse,
     BatchSummaryDto,
@@ -44,10 +67,12 @@ from video_converter.core.models import (
     OutputListResponse,
     StructuredErrorResponse,
     SystemSettings,
+    UploadResponse,
     WorkerHealthResponse,
     now_iso,
 )
 from video_converter.core.path_validation import SourcePathTraversalError, validate_source_path
+from video_converter.core.storage import StorageError
 
 settings: Settings
 storage_client: Any
@@ -63,6 +88,25 @@ router = APIRouter(
         503: {"model": StructuredErrorResponse, "description": "Service unavailable"},
     }
 )
+
+
+def _write_audit_event(event: AuditEventDto) -> None:
+    if settings is None or not hasattr(settings, "logs_dir"):
+        return
+    settings.logs_dir.mkdir(parents=True, exist_ok=True)
+    with (settings.logs_dir / "audit.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(event.model_dump_json() + "\n")
+
+
+async def _audit(actor: object, action: str, target: str, **details: Any) -> None:
+    username = actor if isinstance(actor, str) and actor else "system"
+    event = AuditEventDto(
+        at=now_iso(), actor=username, action=action, target=target, details=details
+    )
+    try:
+        await asyncio.to_thread(_write_audit_event, event)
+    except OSError:
+        logger.warning("could not persist audit event", exc_info=True)
 
 
 def configure_runtime(
@@ -86,7 +130,7 @@ async def health_live() -> HealthResponse:
     redis_status = "ok"
     try:
         await _maybe_await(storage_client.ping())
-    except redis.RedisError:
+    except (redis.RedisError, StorageError):
         redis_status = "error"
     return HealthResponse(status="ok", redis=redis_status)
 
@@ -95,7 +139,7 @@ async def health_live() -> HealthResponse:
 async def health_ready() -> HealthResponse:
     try:
         await _maybe_await(storage_client.ping())
-    except redis.RedisError as exc:
+    except (redis.RedisError, StorageError) as exc:
         raise HTTPException(status_code=503, detail="Redis unavailable") from exc
     return HealthResponse(status="ready", redis="ok")
 
@@ -169,6 +213,15 @@ def _build_job_record(payload: JobCreateRequest, *, batch_id: str | None = None)
         updated_at=now,
         batch_id=batch_id,
         attempt_count=0,
+        max_attempts=payload.max_attempts,
+        quality_crf=payload.quality_crf,
+        target_video_bitrate=payload.target_video_bitrate,
+        audio_bitrate_kbps=payload.audio_bitrate_kbps,
+        resolution=payload.resolution,
+        encoder_preset=payload.encoder_preset,
+        hardware_acceleration=payload.hardware_acceleration,
+        priority=payload.priority,
+        log_download_url=f"/api/v1/jobs/{job_id}/log",
     )
 
 
@@ -241,35 +294,61 @@ async def validate_jobs(payload: JobBatchCreateRequest) -> JobValidationResponse
     )
 
 
-def _idempotency_cache_key(idempotency_key: str) -> str:
-    return f"{IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
+def _idempotency_cache_key(idempotency_key: str, actor: str) -> str:
+    actor_digest = hashlib.sha256(actor.encode()).hexdigest()[:16]
+    return f"{IDEMPOTENCY_KEY_PREFIX}{actor_digest}:{idempotency_key}"
 
 
-async def _load_idempotent_batch_response(
-    idempotency_key: str | None,
-) -> JobBatchCreateResponse | None:
-    if not idempotency_key:
-        return None
+def _batch_payload_hash(payload: JobBatchCreateRequest) -> str:
+    canonical = payload.model_dump_json(exclude_none=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
-    raw = await _maybe_await(storage_client.get(_idempotency_cache_key(idempotency_key)))
+
+async def _claim_idempotency_key(
+    cache_key: str,
+    payload_hash: str,
+) -> tuple[bool, JobBatchCreateResponse | None]:
+    claim = json.dumps({"payload_hash": payload_hash, "state": "pending"})
+    created = await _maybe_await(storage_client.set(cache_key, claim, ex=60, nx=True))
+    if created:
+        return True, None
+    raw = await _maybe_await(storage_client.get(cache_key))
     if not raw:
-        return None
-
+        return await _claim_idempotency_key(cache_key, payload_hash)
     try:
-        return JobBatchCreateResponse.model_validate_json(str(raw))
-    except Exception:  # noqa: BLE001
-        return None
+        stored = json.loads(str(raw))
+    except json.JSONDecodeError:
+        stored = None
+    if not isinstance(stored, dict):
+        raise HTTPException(status_code=409, detail="Invalid idempotency state")
+    if stored.get("payload_hash") != payload_hash:
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency-Key was already used with a different payload",
+        )
+    response_payload = stored.get("response")
+    if response_payload is not None:
+        return False, JobBatchCreateResponse.model_validate(response_payload)
+    raise HTTPException(status_code=409, detail="An identical batch request is still processing")
 
 
 async def _store_idempotent_batch_response(
-    idempotency_key: str | None, response: JobBatchCreateResponse
+    cache_key: str | None,
+    payload_hash: str,
+    response: JobBatchCreateResponse,
 ) -> None:
-    if not idempotency_key:
+    if not cache_key:
         return
     await _maybe_await(
         storage_client.set(
-            _idempotency_cache_key(idempotency_key),
-            response.model_dump_json(),
+            cache_key,
+            json.dumps(
+                {
+                    "payload_hash": payload_hash,
+                    "state": "completed",
+                    "response": response.model_dump(mode="json"),
+                }
+            ),
             ex=24 * 60 * 60,
         )
     )
@@ -308,8 +387,21 @@ def _validate_and_build_batch(
             valid_items.append((index, item))
 
     records: list[JobRecord] = []
-    for _index, item in valid_items:
-        records.append(_build_job_record(item, batch_id=batch_id))
+    for index, item in valid_items:
+        try:
+            records.append(_build_job_record(item, batch_id=batch_id))
+        except HTTPException as exc:
+            errors.append(
+                BatchCreateError(
+                    index=index,
+                    input_filename=item.input_filename,
+                    source_root_key=item.source_root_key,
+                    source_path=item.source_path,
+                    error_code=error_code(exc),
+                    message=str(exc.detail or "Source disappeared during validation"),
+                    recoverable=True,
+                )
+            )
 
     return records, errors
 
@@ -323,32 +415,50 @@ def _validate_and_build_batch(
 async def create_jobs_batch(
     payload: JobBatchCreateRequest,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=200)] = None,
+    actor: Annotated[str, Depends(get_current_user)] = "system",
 ) -> JobBatchCreateResponse:
     normalized_idempotency_key = idempotency_key.strip() if idempotency_key else None
-    cached = await _load_idempotent_batch_response(normalized_idempotency_key)
-    if cached is not None:
-        return cached
+    payload_hash = _batch_payload_hash(payload)
+    cache_key = (
+        _idempotency_cache_key(normalized_idempotency_key, actor)
+        if normalized_idempotency_key
+        else None
+    )
+    if cache_key:
+        _claimed, cached = await _claim_idempotency_key(cache_key, payload_hash)
+        if cached is not None:
+            return cached
 
     batch_id = str(uuid.uuid4())
-    records, errors = _validate_and_build_batch(payload.jobs, batch_id)
+    enqueued = False
+    try:
+        records, errors = _validate_and_build_batch(payload.jobs, batch_id)
 
-    if not records and errors:
-        raise HTTPException(
-            status_code=422,
-            detail=f"All {len(errors)} job(s) failed validation",
+        if not records and errors:
+            raise HTTPException(
+                status_code=422,
+                detail=f"All {len(errors)} job(s) failed validation",
+            )
+
+        if not records:
+            raise HTTPException(status_code=422, detail="No jobs provided")
+
+        await _enqueue_jobs(records)
+        enqueued = True
+        response = JobBatchCreateResponse(
+            jobs=records,
+            errors=errors,
+            idempotency_key=normalized_idempotency_key,
         )
-
-    if not records:
-        raise HTTPException(status_code=422, detail="No jobs provided")
-
-    await _enqueue_jobs(records)
-    response = JobBatchCreateResponse(
-        jobs=records,
-        errors=errors,
-        idempotency_key=normalized_idempotency_key,
-    )
-    await _store_idempotent_batch_response(normalized_idempotency_key, response)
-    return response
+        await _store_idempotent_batch_response(cache_key, payload_hash, response)
+        return response
+    except Exception:
+        # Before enqueue it is safe to release the claim for a corrected retry.
+        # Afterwards, retaining the short-lived pending claim prevents duplicate
+        # jobs if persisting the cached response itself fails.
+        if cache_key and not enqueued:
+            await _maybe_await(storage_client.delete(cache_key))
+        raise
 
 
 def _parse_status_filter(status: str | JobStatus | None) -> set[JobStatus] | None:
@@ -452,7 +562,7 @@ async def list_jobs(
     response: Response,
     status: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
-    cursor: Annotated[int, Query(ge=0)] = 0,
+    cursor: Annotated[str | None, Query(max_length=128)] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
     profile: Annotated[str | None, Query(max_length=100)] = None,
     source_root_key: Annotated[str | None, Query(max_length=64)] = None,
@@ -463,10 +573,53 @@ async def list_jobs(
 ) -> list[JobRecord]:
     jobs: list[JobRecord] = []
     next_cursor: int | None = None
-    scan_cursor: int | None = cursor
+    cursor_text = str(cursor) if cursor is not None else None
+    scan_cursor: int | None = int(cursor_text) if cursor_text and cursor_text.isdigit() else 0
     statuses = _parse_status_filter(status)
     created_after_dt = _parse_datetime_filter(created_after, "created_after")
     created_before_dt = _parse_datetime_filter(created_before, "created_before")
+    queue_positions_method = getattr(job_repository, "queue_positions", None)
+    queue_positions = await _maybe_await(queue_positions_method()) if queue_positions_method else {}
+
+    list_ids_method = getattr(job_repository, "list_ids", None)
+    if list_ids_method is not None and not (cursor_text and cursor_text.isdigit()):
+        ordered_ids = list(reversed(await _maybe_await(list_ids_method())))
+        start = 0
+        if cursor_text:
+            try:
+                start = ordered_ids.index(cursor_text) + 1
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="Invalid or expired cursor") from exc
+        last_scanned_index: int | None = None
+        for index, job_id in enumerate(ordered_ids[start:], start=start):
+            last_scanned_index = index
+            record = await _maybe_await(_get_job_record(str(job_id)))
+            if record is None or not _matches_job_filters(
+                record,
+                statuses=statuses,
+                q=q,
+                profile=profile,
+                source_root_key=source_root_key,
+                source_type=source_type,
+                include_archived=include_archived,
+                created_after=created_after_dt,
+                created_before=created_before_dt,
+            ):
+                continue
+            if record.status == JobStatus.queued:
+                record.queue_position = queue_positions.get(record.id)
+                if record.queue_position:
+                    record.estimated_start_seconds = max(0, record.queue_position - 1) * 60
+            jobs.append(record)
+            if len(jobs) >= limit:
+                break
+        if (
+            response is not None
+            and last_scanned_index is not None
+            and last_scanned_index + 1 < len(ordered_ids)
+        ):
+            response.headers["X-Next-Cursor"] = str(ordered_ids[last_scanned_index])
+        return jobs
 
     while scan_cursor is not None and len(jobs) < limit:
         records, page_next_cursor = await _maybe_await(
@@ -488,6 +641,10 @@ async def list_jobs(
             ):
                 continue
             jobs.append(record)
+            if record.status == JobStatus.queued:
+                record.queue_position = queue_positions.get(record.id)
+                if record.queue_position:
+                    record.estimated_start_seconds = max(0, record.queue_position - 1) * 60
             if len(jobs) >= limit:
                 next_cursor = page_next_cursor
                 break
@@ -526,10 +683,29 @@ async def list_batches(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     cursor: Annotated[int, Query(ge=0)] = 0,
 ) -> BatchListResponse:
+    list_batch_ids_method = getattr(job_repository, "list_batch_ids", None)
+    list_batch_records_method = getattr(job_repository, "list_batch_records", None)
+    if list_batch_ids_method is not None and list_batch_records_method is not None:
+        batch_ids = await _maybe_await(list_batch_ids_method())
+        if batch_ids:
+            selected_ids = batch_ids[cursor : cursor + limit]
+            indexed_batches: list[BatchSummaryDto] = []
+            for batch_id in selected_ids:
+                records = await _maybe_await(list_batch_records_method(batch_id))
+                visible = [record for record in records if not record.archived]
+                if visible:
+                    indexed_batches.append(_batch_summary_from_records(batch_id, visible))
+            next_cursor = cursor + limit if cursor + limit < len(batch_ids) else None
+            if response is not None and next_cursor is not None:
+                response.headers["X-Next-Cursor"] = str(next_cursor)
+            return BatchListResponse(
+                batches=indexed_batches,
+                next_cursor=str(next_cursor) if next_cursor is not None else None,
+            )
+
     grouped: dict[str, list[JobRecord]] = {}
     scan_cursor: int | None = 0
-    wanted_batches = cursor + limit + 1
-    while scan_cursor is not None and len(grouped) < wanted_batches:
+    while scan_cursor is not None:
         records, scan_cursor = await _maybe_await(
             job_repository.list_records_page(
                 cursor=scan_cursor, limit=max(limit, 100), newest_first=True
@@ -650,20 +826,44 @@ async def worker_health() -> WorkerHealthResponse:
     redis_status = "ok"
     try:
         await _maybe_await(storage_client.ping())
-        queue_depth = int(await _maybe_await(storage_client.llen(QUEUE_NAME)) or 0)
+        queue_depth = sum(
+            int(await _maybe_await(storage_client.llen(queue)) or 0)
+            for queue in (HIGH_PRIORITY_QUEUE_NAME, QUEUE_NAME, LOW_PRIORITY_QUEUE_NAME)
+        )
         running_jobs = await _maybe_await(job_repository.count_running_jobs())
     except Exception:  # redis.RedisError or sqlite errors from the local backend
         redis_status = "error"
         queue_depth = 0
         running_jobs = 0
 
+    heartbeat_age: float | None = None
+    hardware_encoders: list[str] = []
+    try:
+        raw_heartbeat = await _maybe_await(storage_client.get(WORKER_HEARTBEAT_KEY))
+        heartbeat = json.loads(str(raw_heartbeat)) if raw_heartbeat else {}
+        heartbeat_at = float(heartbeat.get("timestamp", 0))
+        heartbeat_age = max(0.0, time.time() - heartbeat_at) if heartbeat_at else None
+        hardware_encoders = [
+            str(value) for value in heartbeat.get("hardware_encoders", []) if value
+        ]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    worker_online = heartbeat_age is not None and heartbeat_age < 30
+    disk = shutil.disk_usage(settings.data_root)
     return WorkerHealthResponse(
-        status="ok" if redis_status == "ok" else "error",
+        status="ok" if redis_status == "ok" and worker_online else "error",
         redis=redis_status,
         queue_depth=queue_depth,
         running_jobs=running_jobs,
         cpu_percent=psutil.cpu_percent(interval=None),
         checked_at=now_iso(),
+        worker_online=worker_online,
+        heartbeat_age_seconds=heartbeat_age,
+        disk_total_bytes=disk.total,
+        disk_used_bytes=disk.used,
+        disk_free_bytes=disk.free,
+        disk_used_percent=(disk.used / disk.total * 100) if disk.total else 0,
+        hardware_encoders=hardware_encoders,
     )
 
 
@@ -689,25 +889,31 @@ async def list_outputs(
     if not outputs_dir.exists():
         return OutputListResponse(outputs=[])
 
-    entries: list[Path] = []
+    entries: list[tuple[Path, os.stat_result]] = []
     for child in outputs_dir.iterdir():
-        if not child.is_file() or child.name.startswith("."):
+        try:
+            if not child.is_file() or child.name.startswith("."):
+                continue
+            if q and q.lower() not in child.name.lower():
+                continue
+            entries.append((child, child.stat()))
+        except OSError:
+            # Output may be concurrently cleaned up between directory scan and stat.
             continue
-        if q and q.lower() not in child.name.lower():
-            continue
-        entries.append(child)
 
-    entries.sort(key=lambda p: (p.stat().st_mtime, p.name.lower()), reverse=True)
+    entries.sort(key=lambda item: (item[1].st_mtime, item[0].name.lower()), reverse=True)
     selected = entries[cursor : cursor + limit]
     next_cursor = cursor + limit if cursor + limit < len(entries) else None
     outputs = [
         OutputFileDto(
             filename=path.name,
-            size_bytes=path.stat().st_size,
-            modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
+            size_bytes=stat.st_size,
+            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
             download_url=f"/api/v1/outputs/{path.name}/download",
+            preview_url=f"/api/v1/outputs/{path.name}/preview",
+            thumbnail_url=f"/api/v1/outputs/{path.name}/thumbnail",
         )
-        for path in selected
+        for path, stat in selected
     ]
     if response is not None and next_cursor is not None:
         response.headers["X-Next-Cursor"] = str(next_cursor)
@@ -722,6 +928,191 @@ async def download_output(filename: str) -> FileResponse:
     if not output_path.exists() or not output_path.is_file():
         raise HTTPException(status_code=404, detail="Output not found")
     return FileResponse(output_path, filename=output_path.name)
+
+
+def _iter_file_range(path: Path, start: int, end: int):
+    with path.open("rb") as handle:
+        handle.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = handle.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+@router.get("/api/v1/outputs/{filename}/preview", dependencies=[Depends(get_stream_user)])
+async def preview_output(filename: str, request: Request) -> StreamingResponse:
+    output_path = _safe_output_path(filename)
+    if not output_path.exists() or not output_path.is_file():
+        raise HTTPException(status_code=404, detail="Output not found")
+    size = output_path.stat().st_size
+    start, end = 0, size - 1
+    status_code = 200
+    range_header = request.headers.get("range")
+    if range_header:
+        try:
+            unit, raw_range = range_header.strip().split("=", 1)
+            if unit.lower() != "bytes" or "," in raw_range:
+                raise ValueError
+            raw_start, raw_end = raw_range.split("-", 1)
+            if raw_start:
+                start = int(raw_start)
+                end = int(raw_end) if raw_end else end
+            elif raw_end:
+                suffix_length = int(raw_end)
+                start = max(0, size - suffix_length)
+            if size == 0 or start < 0 or start >= size or end < start:
+                raise ValueError
+            end = min(end, size - 1)
+            status_code = 206
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=416,
+                detail="Invalid byte range",
+                headers={"Content-Range": f"bytes */{size}"},
+            ) from None
+    media_type = mimetypes.guess_type(output_path.name)[0] or "application/octet-stream"
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(max(0, end - start + 1)),
+    }
+    if status_code == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        _iter_file_range(output_path, start, end),
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+    )
+
+
+def _thumbnail_path(filename: str) -> Path:
+    directory = settings.temp_dir / "thumbnails"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{Path(filename).stem}.jpg"
+
+
+@router.get("/api/v1/outputs/{filename}/thumbnail", dependencies=[Depends(get_stream_user)])
+async def output_thumbnail(filename: str) -> FileResponse:
+    output_path = _safe_output_path(filename)
+    if not output_path.exists() or not output_path.is_file():
+        raise HTTPException(status_code=404, detail="Output not found")
+    thumbnail = _thumbnail_path(filename)
+    if not thumbnail.exists() or thumbnail.stat().st_mtime < output_path.stat().st_mtime:
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "00:00:01",
+            "-i",
+            str(output_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=480:-2",
+            str(thumbnail),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            return_code = await asyncio.wait_for(process.wait(), timeout=30)
+        except TimeoutError as exc:
+            process.kill()
+            raise HTTPException(status_code=504, detail="Thumbnail generation timed out") from exc
+        if return_code != 0 or not thumbnail.exists():
+            raise HTTPException(status_code=500, detail="Thumbnail generation failed")
+    return FileResponse(thumbnail, media_type="image/jpeg")
+
+
+@router.delete("/api/v1/outputs/{filename}", dependencies=[Depends(get_current_user)])
+async def delete_output(filename: str) -> dict[str, str]:
+    output_path = _safe_output_path(filename)
+    if not output_path.exists() or not output_path.is_file():
+        raise HTTPException(status_code=404, detail="Output not found")
+    output_path.unlink()
+    _thumbnail_path(filename).unlink(missing_ok=True)
+    return {"deleted": filename}
+
+
+@router.get(
+    "/api/v1/jobs/{job_id}/log",
+    dependencies=[Depends(get_current_user)],
+)
+async def download_job_log(job_id: str) -> FileResponse:
+    record = await _get_job_record(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    log_path = (settings.logs_dir / f"{job_id}.ffmpeg.log").resolve()
+    try:
+        log_path.relative_to(settings.logs_dir.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid job id") from exc
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="Job log not found")
+    return FileResponse(log_path, filename=log_path.name, media_type="text/plain")
+
+
+@router.post(
+    "/api/v1/media/uploads",
+    response_model=UploadResponse,
+    status_code=201,
+)
+async def upload_media(
+    file: Annotated[UploadFile, File()],
+    actor: Annotated[str, Depends(get_current_user)],
+) -> UploadResponse:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=422, detail="Unsupported video extension")
+    safe_stem = (
+        "".join(
+            character if character.isalnum() or character in {"-", "_", "."} else "_"
+            for character in Path(file.filename or "upload").stem
+        ).strip("._")
+        or "upload"
+    )
+    filename = f"{safe_stem}.{uuid.uuid4().hex[:8]}{suffix}"
+    destination = settings.input_dir / filename
+    size = 0
+    try:
+        with destination.open("xb") as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > settings.max_upload_bytes:
+                    raise HTTPException(status_code=413, detail="Upload exceeds configured limit")
+                output.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+    await _audit(actor, "media.upload", filename, size_bytes=size)
+    return UploadResponse(input_filename=filename, size_bytes=size)
+
+
+@router.get(
+    "/api/v1/audit",
+    response_model=list[AuditEventDto],
+    dependencies=[Depends(get_current_user)],
+)
+async def list_audit_events(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[AuditEventDto]:
+    audit_path = settings.logs_dir / "audit.jsonl"
+    if not audit_path.exists():
+        return []
+    lines = await asyncio.to_thread(audit_path.read_text, encoding="utf-8")
+    events: list[AuditEventDto] = []
+    for line in reversed(lines.splitlines()):
+        try:
+            events.append(AuditEventDto.model_validate_json(line))
+        except ValueError:
+            continue
+        if len(events) >= limit:
+            break
+    return events
 
 
 @router.delete("/api/v1/outputs", dependencies=[Depends(get_current_user)])
@@ -745,6 +1136,28 @@ def _default_system_settings() -> SystemSettings:
     return SystemSettings(worker_concurrency=settings.worker_concurrency)
 
 
+def _system_settings_response(value: SystemSettings) -> JSONResponse:
+    """Keep legacy response shape while retaining a precise OpenAPI schema."""
+    data = value.model_dump(mode="json")
+    for key in ("retry", "disk_safety"):
+        if data.get(key) is None:
+            data.pop(key, None)
+    for key in (
+        "quality_crf",
+        "target_video_bitrate",
+        "audio_bitrate_kbps",
+        "resolution",
+        "encoder_preset",
+        "hardware_acceleration",
+    ):
+        if data["default_export"].get(key) is None:
+            data["default_export"].pop(key, None)
+    for key in ("delete_terminal_jobs", "job_retention_days"):
+        if data["auto_cleanup"].get(key) is None:
+            data["auto_cleanup"].pop(key, None)
+    return JSONResponse(data)
+
+
 async def _load_system_settings() -> SystemSettings:
     raw = await _maybe_await(storage_client.get("system:settings"))
     defaults = _default_system_settings()
@@ -760,24 +1173,34 @@ async def _load_system_settings() -> SystemSettings:
 
 
 @router.get(
-    "/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)]
+    "/api/v1/settings",
+    response_model=SystemSettings,
+    dependencies=[Depends(get_current_user)],
 )
-async def get_system_settings() -> SystemSettings:
-    return await _maybe_await(_load_system_settings())
+async def get_system_settings() -> JSONResponse:
+    value = await _maybe_await(_load_system_settings())
+    return _system_settings_response(value)
 
 
 @router.post(
-    "/api/v1/settings", response_model=SystemSettings, dependencies=[Depends(get_current_user)]
+    "/api/v1/settings",
+    response_model=SystemSettings,
+    dependencies=[Depends(get_current_user)],
 )
-async def update_system_settings(payload: SystemSettings) -> SystemSettings:
+async def update_system_settings(payload: SystemSettings) -> JSONResponse:
     merged = SystemSettings.model_validate(
         _default_system_settings().model_dump() | payload.model_dump(exclude_unset=True)
     )
     await _maybe_await(storage_client.set("system:settings", merged.model_dump_json()))
-    return merged
+    return _system_settings_response(merged)
 
 
 async def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:
+    atomic_cancel = getattr(job_repository, "request_cancel", None)
+    if atomic_cancel is not None:
+        updated, reason = await _maybe_await(atomic_cancel(record.id))
+        return (updated or record), reason
+
     if record.status in {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}:
         return record, "Job is already completed"
 
@@ -809,7 +1232,10 @@ async def _cancel_record(record: JobRecord) -> tuple[JobRecord, str | None]:
     response_model=JobBulkActionResponse,
     dependencies=[Depends(get_current_user)],
 )
-async def cancel_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
+async def cancel_jobs_bulk(
+    payload: JobIdsRequest,
+    actor: Annotated[str, Depends(get_current_user)] = "system",
+) -> JobBulkActionResponse:
     updated: list[JobRecord] = []
     skipped: list[JobActionSkip] = []
 
@@ -822,9 +1248,12 @@ async def cancel_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
         changed, reason = await _maybe_await(_cancel_record(record))
         if reason:
             skipped.append(JobActionSkip(job_id=job_id, reason=reason))
+            continue
         updated.append(changed)
 
-    return JobBulkActionResponse(updated=updated, skipped=skipped)
+    result = JobBulkActionResponse(updated=updated, skipped=skipped)
+    await _audit(actor, "jobs.cancel", ",".join(payload.job_ids), updated=len(updated))
+    return result
 
 
 @router.post(
@@ -832,12 +1261,16 @@ async def cancel_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     response_model=JobRecord,
     dependencies=[Depends(get_current_user)],
 )
-async def cancel_job(job_id: str) -> JobRecord:
+async def cancel_job(
+    job_id: str,
+    actor: Annotated[str, Depends(get_current_user)] = "system",
+) -> JobRecord:
     record = await _maybe_await(_get_job_record(job_id))
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
 
     updated, _ = await _maybe_await(_cancel_record(record))
+    await _audit(actor, "job.cancel", job_id)
     return updated
 
 
@@ -919,7 +1352,10 @@ async def archive_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
     response_model=JobBulkActionResponse,
     dependencies=[Depends(get_current_user)],
 )
-async def delete_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
+async def delete_jobs_bulk(
+    payload: JobIdsRequest,
+    actor: Annotated[str, Depends(get_current_user)] = "system",
+) -> JobBulkActionResponse:
     updated: list[JobRecord] = []
     skipped: list[JobActionSkip] = []
 
@@ -936,7 +1372,63 @@ async def delete_jobs_bulk(payload: JobIdsRequest) -> JobBulkActionResponse:
         await _maybe_await(job_repository.delete(job_id))
         updated.append(record)
 
-    return JobBulkActionResponse(updated=updated, skipped=skipped)
+    result = JobBulkActionResponse(updated=updated, skipped=skipped)
+    await _audit(actor, "jobs.delete", ",".join(payload.job_ids), deleted=len(updated))
+    return result
+
+
+async def _records_for_batch(batch_id: str) -> list[JobRecord]:
+    indexed = getattr(job_repository, "list_batch_records", None)
+    if indexed is not None:
+        records = list(await _maybe_await(indexed(batch_id)))
+        if records:
+            return records
+    records: list[JobRecord] = []
+    cursor: int | None = 0
+    while cursor is not None:
+        page, cursor = await _maybe_await(
+            job_repository.list_records_page(cursor=cursor, limit=500, newest_first=True)
+        )
+        records.extend(record for record in page if record.batch_id == batch_id)
+    return records
+
+
+@router.post(
+    "/api/v1/batches/{batch_id}/{action}",
+    response_model=BatchActionResponse,
+)
+async def act_on_batch(
+    batch_id: str,
+    action: str,
+    actor: Annotated[str, Depends(get_current_user)],
+) -> BatchActionResponse:
+    if action not in {"cancel", "retry", "archive", "delete"}:
+        raise HTTPException(status_code=422, detail="Unsupported batch action")
+    records = await _records_for_batch(batch_id)
+    if not records:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    payload = JobIdsRequest(job_ids=[record.id for record in records])
+    if action == "cancel":
+        result = await cancel_jobs_bulk(payload)
+    elif action == "retry":
+        retryable = [
+            record.id
+            for record in records
+            if record.status in {JobStatus.failed, JobStatus.cancelled, JobStatus.completed}
+        ]
+        result = await start_jobs_bulk(JobIdsRequest(job_ids=retryable))
+    elif action == "archive":
+        result = await archive_jobs_bulk(payload)
+    else:
+        result = await delete_jobs_bulk(payload)
+    await _audit(
+        actor,
+        f"batch.{action}",
+        batch_id,
+        updated=len(result.updated),
+        skipped=len(result.skipped),
+    )
+    return BatchActionResponse(batch_id=batch_id, action=action, result=result)
 
 
 @router.get(

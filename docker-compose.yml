@@ -1,24 +1,35 @@
 services:
   app:
-    container_name: batch-video-converter
+    image: ${APP_IMAGE:-batch-video-converter:local}
     build:
       context: .
       dockerfile: Dockerfile
-    # Default CMD (/app/entrypoint.sh) runs both API and worker together.
-    # Override with one of the following to run them separately:
-    #   command: uvicorn video_converter.api.main:app --host 0.0.0.0 --port 8765
-    #   command: python -m video_converter.worker.main
-    env_file:
-      - .env
+    environment:
+      VIDEO_CONVERTER_STORAGE: ${VIDEO_CONVERTER_STORAGE:-redis}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: /data
+      MEDIA_MOUNTS: ${MEDIA_MOUNTS:-Movies=/media/movies;Series=/media/series;Downloads=/media/downloads}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      FFMPEG_THREADS: ${FFMPEG_THREADS:-1}
+      FFMPEG_STALL_TIMEOUT_SECONDS: ${FFMPEG_STALL_TIMEOUT_SECONDS:-300}
+      MIN_FREE_DISK_BYTES: ${MIN_FREE_DISK_BYTES:-536870912}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10737418240}
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:-}
     ports:
-      - "8765:8765"
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-8765}:8765"
     volumes:
-      # Keep the in-container contract stable. DATA_ROOT belongs inside the
-      # container and must not accidentally turn into a host bind target.
-      - ./data:/data
-      # Add/remove media mount lines as needed.
-      - ./media/movies:/media/movies:ro
-      - ./media/series:/media/series:ro
+      # APP_DATA_SOURCE accepts either a host path (./data) or the declared
+      # app-data named volume, which is useful for Coolify/Portainer.
+      - ${APP_DATA_SOURCE:-./data}:/data
+      - ${MEDIA_MOVIES_SOURCE:-./media/movies}:/media/movies:ro
+      - ${MEDIA_SERIES_SOURCE:-./media/series}:/media/series:ro
+      - ${MEDIA_DOWNLOADS_SOURCE:-./media/downloads}:/media/downloads:ro
+    devices:
+      # Set V4L2_DEVICE=/dev/video11 on Raspberry Pi 4. The /dev/null default
+      # keeps the same Compose file portable; Pi 5 uses software encoding.
+      - ${V4L2_DEVICE:-/dev/null}:/dev/video11
     depends_on:
       redis:
         condition: service_healthy
@@ -38,19 +49,17 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2g
-          cpus: "2.0"
+          memory: ${APP_MEMORY_LIMIT:-2g}
+          cpus: "${APP_CPU_LIMIT:-2.0}"
     restart: unless-stopped
 
   redis:
-    container_name: batch-video-converter-redis
     image: redis:7.2-alpine
     command: redis-server --appendonly yes
+    # Loopback-only access supports host-side diagnostics without exposing
+    # unauthenticated Redis to the network.
     ports:
-      # Bound to localhost only: exposing an unauthenticated Redis on the LAN
-      # would let anyone wipe the queue. Remove the mapping entirely if you
-      # don't need host access for local development.
-      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -61,9 +70,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
-          cpus: "0.5"
+          memory: ${REDIS_MEMORY_LIMIT:-256m}
+          cpus: "${REDIS_CPU_LIMIT:-0.5}"
     restart: unless-stopped
 
 volumes:
+  app-data:
   redis-data:

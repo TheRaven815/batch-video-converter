@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable
 
 import redis
 
 from video_converter.core.config import Settings
+
+
+class StorageError(RuntimeError):
+    """Backend-neutral persistence failure."""
 
 
 class LocalPipeline:
@@ -21,6 +26,10 @@ class LocalPipeline:
 
     def rpush(self, key: str, value: str) -> LocalPipeline:
         self.operations.append(("rpush", (key, value)))
+        return self
+
+    def lpush(self, key: str, value: str) -> LocalPipeline:
+        self.operations.append(("lpush", (key, value)))
         return self
 
     def lrem(self, key: str, count: int, value: str) -> LocalPipeline:
@@ -139,11 +148,19 @@ class LocalFileStore:
                 return None
             return str(value)
 
-    def set(self, key: str, value: str, ex: int | None = None) -> bool:
+    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
         expires_at = time.time() + ex if ex else None
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
+                if nx:
+                    existing = conn.execute(
+                        "SELECT 1 FROM kv WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)",
+                        (key, time.time()),
+                    ).fetchone()
+                    if existing is not None:
+                        conn.execute("COMMIT")
+                        return False
                 conn.execute(
                     "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
                     (key, value, expires_at),
@@ -153,6 +170,27 @@ class LocalFileStore:
                 conn.execute("ROLLBACK")
                 raise
         return True
+
+    def compare_and_set(self, key: str, expected: str | None, value: str) -> bool:
+        """Atomically replace ``key`` only when its current value matches."""
+        with self._lock, self._connect() as conn:
+            self._begin_write(conn)
+            try:
+                row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+                current = str(row[0]) if row is not None else None
+                if current != expected:
+                    conn.execute("COMMIT")
+                    return False
+                conn.execute(
+                    "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, NULL) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = NULL",
+                    (key, value),
+                )
+                conn.execute("COMMIT")
+                return True
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
     def delete(self, key: str) -> int:
         with self._lock, self._connect() as conn:
@@ -174,6 +212,27 @@ class LocalFileStore:
                 conn.execute(
                     "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
                     (key, next_position, value),
+                )
+                length = conn.execute(
+                    "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
+                ).fetchone()[0]
+                conn.execute("COMMIT")
+                return int(length)
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def lpush(self, key: str, value: str) -> int:
+        with self._lock, self._connect() as conn:
+            self._begin_write(conn)
+            try:
+                first = conn.execute(
+                    "SELECT MIN(position) FROM lists WHERE key = ?", (key,)
+                ).fetchone()[0]
+                position = int(first) - 1 if first is not None else 0
+                conn.execute(
+                    "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                    (key, position, value),
                 )
                 length = conn.execute(
                     "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
@@ -358,9 +417,7 @@ class LocalFileStore:
                 conn.execute("ROLLBACK")
                 raise
 
-    def pipeline(
-        self, transaction: bool = True
-    ) -> LocalPipeline:  # noqa: ARG002 - mirrors redis-py API.
+    def pipeline(self, transaction: bool = True) -> LocalPipeline:  # noqa: ARG002 - mirrors redis-py API.
         return LocalPipeline(self)
 
     def _lpop(self, key: str) -> str | None:
@@ -408,6 +465,20 @@ class LocalFileStore:
                         conn.execute(
                             "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
                             (key, next_position, value),
+                        )
+                        length = conn.execute(
+                            "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
+                        ).fetchone()[0]
+                        results.append(int(length))
+                    elif name == "lpush":
+                        key, value = args
+                        first = conn.execute(
+                            "SELECT MIN(position) FROM lists WHERE key = ?", (key,)
+                        ).fetchone()[0]
+                        position = int(first) - 1 if first is not None else 0
+                        conn.execute(
+                            "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                            (key, position, value),
                         )
                         length = conn.execute(
                             "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
@@ -461,6 +532,44 @@ class LocalFileStore:
 
 
 StorageClient = redis.Redis | LocalFileStore
+
+
+def _translate_sqlite_errors(method: Any):
+    @wraps(method)
+    def wrapped(*args: Any, **kwargs: Any):
+        try:
+            return method(*args, **kwargs)
+        except sqlite3.Error as exc:
+            raise StorageError(str(exc)) from exc
+
+    return wrapped
+
+
+for _method_name in (
+    "ping",
+    "get",
+    "set",
+    "compare_and_set",
+    "delete",
+    "rpush",
+    "lpush",
+    "lrange",
+    "llen",
+    "lrem",
+    "sadd",
+    "srem",
+    "scard",
+    "smembers",
+    "blpop",
+    "blmove",
+    "_execute_pipeline",
+):
+    if hasattr(LocalFileStore, _method_name):
+        setattr(
+            LocalFileStore,
+            _method_name,
+            _translate_sqlite_errors(getattr(LocalFileStore, _method_name)),
+        )
 
 
 def get_storage_backend() -> str:

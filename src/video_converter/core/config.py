@@ -18,10 +18,15 @@ class MediaRoot:
 
 
 QUEUE_NAME = "jobs:queue"
+HIGH_PRIORITY_QUEUE_NAME = "jobs:queue:high"
+LOW_PRIORITY_QUEUE_NAME = "jobs:queue:low"
 PROCESSING_QUEUE_NAME = "jobs:processing"
 JOB_KEY_PREFIX = "job:"
 JOBS_INDEX_KEY = "jobs:index"
+BATCHES_INDEX_KEY = "batches:index"
+BATCH_JOBS_KEY_PREFIX = "batch:jobs:"
 JOB_EVENTS_CHANNEL = "jobs:events"
+WORKER_HEARTBEAT_KEY = "worker:heartbeat"
 
 
 class Settings(BaseSettings):
@@ -42,8 +47,11 @@ class Settings(BaseSettings):
     video_converter_storage: Literal["redis", "local"] = "redis"
     data_root: Path = Path("/data")
     media_mounts: str = ""
-    worker_concurrency: int = Field(default=1, ge=1)
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
     ffmpeg_threads: int = Field(default=1, ge=1, le=32)
+    ffmpeg_stall_timeout_seconds: int = Field(default=300, ge=30, le=3600)
+    min_free_disk_bytes: int = Field(default=536_870_912, ge=0)
+    max_upload_bytes: int = Field(default=10_737_418_240, ge=1)
     app_username: str = "admin"
     app_password: str = ""
     jwt_secret: str = ""
@@ -63,7 +71,7 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_worker_concurrency(cls, value: object) -> int:
         try:
-            return max(1, int(str(value).strip()))
+            return max(1, min(8, int(str(value).strip())))
         except (TypeError, ValueError):
             return 1
 

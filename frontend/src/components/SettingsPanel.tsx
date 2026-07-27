@@ -17,7 +17,16 @@ const defaultSystemSettings: SystemSettings = {
     enabled: false,
     retention_days: 30,
     keep_minimum_outputs: 10,
+    delete_terminal_jobs: true,
+    job_retention_days: 90,
   },
+  retry: {
+    enabled: true,
+    max_attempts: 3,
+    initial_backoff_seconds: 10,
+    max_backoff_seconds: 300,
+  },
+  disk_safety: { minimum_free_bytes: 536870912 },
   ui: {
     theme: 'dark',
     density: 'comfortable',
@@ -46,6 +55,14 @@ export function SettingsPanel({
       queryClient.setQueryData(['server', 'settings'], saved);
       setSystemSettings(saved);
       showToast('Settings updated successfully!', 'success');
+      const theme =
+        saved.ui.theme === 'system'
+          ? window.matchMedia('(prefers-color-scheme: light)').matches
+            ? 'light'
+            : 'dark'
+          : saved.ui.theme;
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.density = saved.ui.density;
     },
     onError: (error) => {
       showToast(error instanceof Error ? error.message : 'Update failed.', 'error');
@@ -372,12 +389,153 @@ export function SettingsPanel({
                   disabled={settingsLoading}
                 />
               </div>
+              <label className="form-toggle-row settings-toggle-row">
+                <span className="form-toggle-info">
+                  <p>Delete old terminal job records</p>
+                  <p>Completed, failed and cancelled records are pruned after retention.</p>
+                </span>
+                <input
+                  className="form-checkbox"
+                  type="checkbox"
+                  checked={systemSettings.auto_cleanup.delete_terminal_jobs ?? true}
+                  onChange={(event) =>
+                    patchSettings({
+                      auto_cleanup: {
+                        ...systemSettings.auto_cleanup,
+                        delete_terminal_jobs: event.target.checked,
+                      },
+                    })
+                  }
+                />
+              </label>
+              <div className="form-group">
+                <label className="form-label">Job retention days</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={systemSettings.auto_cleanup.job_retention_days ?? 90}
+                  onChange={(event) =>
+                    patchSettings({
+                      auto_cleanup: {
+                        ...systemSettings.auto_cleanup,
+                        job_retention_days: Number(event.target.value),
+                      },
+                    })
+                  }
+                />
+              </div>
             </div>
           </section>
 
-          {/* Theme/density preferences were removed from the UI: they were
-              stored but never applied anywhere, which was misleading. The
-              backend fields remain for forward compatibility. */}
+          <section className="settings-section" aria-labelledby="retry-settings-title">
+            <span className="form-section-title" id="retry-settings-title">
+              Retry & Safety
+            </span>
+            <label className="form-toggle-row settings-toggle-row">
+              <span className="form-toggle-info">
+                <p>Retry transient FFmpeg failures</p>
+                <p>Uses exponential backoff and a bounded attempt count.</p>
+              </span>
+              <input
+                className="form-checkbox"
+                type="checkbox"
+                checked={systemSettings.retry?.enabled ?? true}
+                onChange={(event) =>
+                  patchSettings({
+                    retry: {
+                      ...(systemSettings.retry ?? defaultSystemSettings.retry!),
+                      enabled: event.target.checked,
+                    },
+                  })
+                }
+              />
+            </label>
+            <div className="form-grid settings-mini-grid">
+              <div className="form-group">
+                <label className="form-label">Maximum attempts</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={systemSettings.retry?.max_attempts ?? 3}
+                  onChange={(event) =>
+                    patchSettings({
+                      retry: {
+                        ...(systemSettings.retry ?? defaultSystemSettings.retry!),
+                        max_attempts: Number(event.target.value),
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Minimum free disk (MB)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min={0}
+                  value={Math.round(
+                    (systemSettings.disk_safety?.minimum_free_bytes ?? 536870912) / 1048576,
+                  )}
+                  onChange={(event) =>
+                    patchSettings({
+                      disk_safety: {
+                        minimum_free_bytes: Number(event.target.value) * 1048576,
+                      },
+                    })
+                  }
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="settings-section" aria-labelledby="appearance-settings-title">
+            <span className="form-section-title" id="appearance-settings-title">
+              Appearance
+            </span>
+            <div className="form-grid settings-mini-grid">
+              <div className="form-group">
+                <label className="form-label">Theme</label>
+                <select
+                  className="form-input"
+                  value={systemSettings.ui.theme}
+                  onChange={(event) =>
+                    patchSettings({
+                      ui: {
+                        ...systemSettings.ui,
+                        theme: event.target.value as SystemSettings['ui']['theme'],
+                      },
+                    })
+                  }
+                >
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                  <option value="system">System</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Density</label>
+                <select
+                  className="form-input"
+                  value={systemSettings.ui.density}
+                  onChange={(event) =>
+                    patchSettings({
+                      ui: {
+                        ...systemSettings.ui,
+                        density: event.target.value as SystemSettings['ui']['density'],
+                      },
+                    })
+                  }
+                >
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </div>
+            </div>
+          </section>
         </div>
       </form>
 

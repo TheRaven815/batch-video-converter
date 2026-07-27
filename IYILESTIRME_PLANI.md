@@ -55,23 +55,23 @@
 
 ## P2 — Veri Bütünlüğü ve Sağlamlık
 
-- [ ] **API ↔ worker arasında lost-update yarışı:** `persist`/`update_status` ve `_cancel_record` korumasız oku-değiştir-yaz yapıyor; `cancel_requested` bayrağı veya durum güncellemeleri sessizce ezilebiliyor. Redis `WATCH`/CAS veya alan bazlı atomik güncelleme (HSET) gerekli. (`job_repository.py:44-51,121-199`, `api/main.py:758-782`)
-- [ ] **Filtreli sayfalamada kayıt atlanıyor:** `limit` sayfa ortasında dolduğunda `next_cursor` tüm sayfanın sonrasını gösteriyor; ayrıca offset tabanlı cursor'lar yeni iş eklendikçe kayıyor (tekrar/atlama). Stabil (ör. job-id tabanlı) cursor'a geçilmeli. (`api/main.py:487-529`)
-- [ ] **`list_batches` yanlış özet üretiyor** (kısmi tarama ile eksik sayım) ve her istekte tüm iş indeksini baştan tarıyor (O(tüm işler)). (`api/main.py:553-583`)
-- [ ] **Idempotency atomik değil ve payload'a bağlı değil:** aynı key ile eşzamanlı iki istek çift iş üretebiliyor; aynı key + farklı payload eski cevabı dönüyor (standart: 422 ile reddetmek). Key'ler kullanıcıya göre ayrılmalı, `SET NX` ile atomikleştirilmeli. (`api/main.py:285-385`)
-- [ ] **Ses `copy` uyumsuzluklarında fallback yok:** Vorbis/FLAC/TrueHD → MP4 kopyalama başarısız oluyor; mevcut fallback yalnızca video codec'ini değiştiriyor. Konteynıra göre ses codec doğrulaması/fallback eklenmeli. (`worker/main.py:301-302,630-639`)
-- [ ] **Graceful shutdown işleri `failed` olarak işaretliyor** — rutin bir redeploy devam eden işleri kalıcı başarısız yapıyor; requeue edilmeli. Ayrıca 600 sn drain süresi Docker'ın 10 sn'lik varsayılan stop grace period'uyla uyumsuz → compose dosyalarına `stop_grace_period` eklenmeli. (`worker/main.py:126-149,646-655,783`)
-- [ ] **Başarısız işler `progress_percent=100` gösteriyor** — UI'da "%100 failed" görünüyor. (`worker/main.py:705-713`)
-- [ ] **`_get_dynamic_concurrency` sınırsız/korumasız:** bozuk `system:settings` değeri (0 veya negatif) worker'ı sessizce sonsuza dek durduruyor; `WORKER_CONCURRENCY` env üst sınırsız. 1–8 aralığına clamp'lenmeli. (`worker/main.py:719-727,748`, `core/config.py:102-105`)
-- [ ] **Stale-recovery hem API'de hem worker'da çalışıyor ve `requeue_existing` kuyruk üyeliğini kontrol etmiyor** → aynı iş iki kez kuyruğa girip iki kez dönüştürülebiliyor. Tek sahip + idempotent requeue. (`api/main.py:67-82`, `job_repository.py:103-111`)
-- [ ] **`update_status` her çağrıda `error_message`'ı eziyor** (error=None gelen progress güncellemesi önceki hatayı siliyor). (`job_repository.py:148`)
-- [ ] **Local (SQLite) modda hata yakalama yanlış:** her yerde yalnızca `redis.RedisError` yakalanıyor; SQLite hataları 500'e dönüşüyor, lifespan'de ise sessizce yutuluyor. Storage soyutlamasına ortak hata tipi tanımlanmalı. (`api/main.py:74-78,130-146`, `storage.py`)
-- [ ] **TOCTOU hataları:** `list_outputs` sıralama sırasında silinen dosyada 500 atıyor; batch oluşturma, doğrulama geçtikten sonra dosya kaybolursa tüm batch'i 422 ile düşürüyor. (`api/main.py:345-347,678-689`)
-- [ ] **Root logger formatı `%(job_id)s` zorunlu kılıyor** — üçüncü parti kütüphane logları "Logging error" spam'i üretiyor; Filter ile varsayılan değer enjekte edilmeli. API tarafında ise hiç logging yapılandırması yok. (`worker/main.py:28-31`)
-- [ ] **Cancel-after-success yarışı:** ffmpeg başarıyla bittikten hemen sonra gelen iptal, tamamlanmış çıktıyı "cancelled" yapıyor. (`worker/main.py:527-528`)
-- [ ] **`cancel_jobs_bulk` atlanan işleri hem `updated` hem `skipped` listesine koyuyor** → UI toast'ı yanlış sayı gösteriyor. (`api/main.py:800-803`)
-- [ ] İş kayıtları ve indeks sonsuza dek büyüyor (TTL/retention yok) → performans zamanla lineer düşüyor. (`job_repository.py:63-65`)
-- [ ] **CI test çalıştırmıyor:** `ci.yml` sadece Ruff + Black; pytest, frontend build/typecheck ve Docker build doğrulaması CI'da yok. `release.yml` arm64'ü `setup-qemu-action` olmadan derlemeye çalışıyor, build cache yok. (`.github/workflows/`)
+- [x] **API ↔ worker arasında lost-update yarışı:** `persist`/`update_status` ve `_cancel_record` korumasız oku-değiştir-yaz yapıyor; `cancel_requested` bayrağı veya durum güncellemeleri sessizce ezilebiliyor. Redis `WATCH`/CAS veya alan bazlı atomik güncelleme (HSET) gerekli. (`job_repository.py:44-51,121-199`, `api/main.py:758-782`)
+- [x] **Filtreli sayfalamada kayıt atlanıyor:** `limit` sayfa ortasında dolduğunda `next_cursor` tüm sayfanın sonrasını gösteriyor; ayrıca offset tabanlı cursor'lar yeni iş eklendikçe kayıyor (tekrar/atlama). Stabil (ör. job-id tabanlı) cursor'a geçilmeli. (`api/main.py:487-529`)
+- [x] **`list_batches` yanlış özet üretiyor** (kısmi tarama ile eksik sayım) ve her istekte tüm iş indeksini baştan tarıyor (O(tüm işler)). (`api/main.py:553-583`)
+- [x] **Idempotency atomik değil ve payload'a bağlı değil:** aynı key ile eşzamanlı iki istek çift iş üretebiliyor; aynı key + farklı payload eski cevabı dönüyor (standart: 422 ile reddetmek). Key'ler kullanıcıya göre ayrılmalı, `SET NX` ile atomikleştirilmeli. (`api/main.py:285-385`)
+- [x] **Ses `copy` uyumsuzluklarında fallback yok:** Vorbis/FLAC/TrueHD → MP4 kopyalama başarısız oluyor; mevcut fallback yalnızca video codec'ini değiştiriyor. Konteynıra göre ses codec doğrulaması/fallback eklenmeli. (`worker/main.py:301-302,630-639`)
+- [x] **Graceful shutdown işleri `failed` olarak işaretliyor** — rutin bir redeploy devam eden işleri kalıcı başarısız yapıyor; requeue edilmeli. Ayrıca 600 sn drain süresi Docker'ın 10 sn'lik varsayılan stop grace period'uyla uyumsuz → compose dosyalarına `stop_grace_period` eklenmeli. (`worker/main.py:126-149,646-655,783`)
+- [x] **Başarısız işler `progress_percent=100` gösteriyor** — UI'da "%100 failed" görünüyor. (`worker/main.py:705-713`)
+- [x] **`_get_dynamic_concurrency` sınırsız/korumasız:** bozuk `system:settings` değeri (0 veya negatif) worker'ı sessizce sonsuza dek durduruyor; `WORKER_CONCURRENCY` env üst sınırsız. 1–8 aralığına clamp'lenmeli. (`worker/main.py:719-727,748`, `core/config.py:102-105`)
+- [x] **Stale-recovery hem API'de hem worker'da çalışıyor ve `requeue_existing` kuyruk üyeliğini kontrol etmiyor** → aynı iş iki kez kuyruğa girip iki kez dönüştürülebiliyor. Tek sahip + idempotent requeue. (`api/main.py:67-82`, `job_repository.py:103-111`)
+- [x] **`update_status` her çağrıda `error_message`'ı eziyor** (error=None gelen progress güncellemesi önceki hatayı siliyor). (`job_repository.py:148`)
+- [x] **Local (SQLite) modda hata yakalama yanlış:** her yerde yalnızca `redis.RedisError` yakalanıyor; SQLite hataları 500'e dönüşüyor, lifespan'de ise sessizce yutuluyor. Storage soyutlamasına ortak hata tipi tanımlanmalı. (`api/main.py:74-78,130-146`, `storage.py`)
+- [x] **TOCTOU hataları:** `list_outputs` sıralama sırasında silinen dosyada 500 atıyor; batch oluşturma, doğrulama geçtikten sonra dosya kaybolursa tüm batch'i 422 ile düşürüyor. (`api/main.py:345-347,678-689`)
+- [x] **Root logger formatı `%(job_id)s` zorunlu kılıyor** — üçüncü parti kütüphane logları "Logging error" spam'i üretiyor; Filter ile varsayılan değer enjekte edilmeli. API tarafında ise hiç logging yapılandırması yok. (`worker/main.py:28-31`)
+- [x] **Cancel-after-success yarışı:** ffmpeg başarıyla bittikten hemen sonra gelen iptal, tamamlanmış çıktıyı "cancelled" yapıyor. (`worker/main.py:527-528`)
+- [x] **`cancel_jobs_bulk` atlanan işleri hem `updated` hem `skipped` listesine koyuyor** → UI toast'ı yanlış sayı gösteriyor. (`api/main.py:800-803`)
+- [x] İş kayıtları ve indeks sonsuza dek büyüyor (TTL/retention yok) → performans zamanla lineer düşüyor. (`job_repository.py:63-65`)
+- [x] **CI test çalıştırmıyor:** `ci.yml` sadece Ruff + Black; pytest, frontend build/typecheck ve Docker build doğrulaması CI'da yok. `release.yml` arm64'ü `setup-qemu-action` olmadan derlemeye çalışıyor, build cache yok. (`.github/workflows/`)
 
 ---
 
@@ -141,29 +141,29 @@
 ## P5 — Yeni Özellik Önerileri (kaliteli bir converter için)
 
 ### Yüksek Değerli
-- [ ] **İş detay paneli** (P3'teki maddenin genişletilmişi): canlı log tail, timeline, fps/speed/bitrate grafiği — veriler zaten modelde var.
-- [ ] **Otomatik retry + backoff:** `attempt_count` alanı mevcut ama hiçbir şey tüketmiyor; geçici ffmpeg hataları insan müdahalesi olmadan (sınırlı deneme ile) yeniden denenmeli.
-- [ ] **Kalite/çözünürlük kontrolleri:** CRF/preset/ses bitrate'i şu an hardcoded; iş modeline kalite (CRF veya hedef bitrate), çözünürlük (1080p/720p/orijinal) ve encoder preset alanları eklenmeli. VP9 için `-row-mt 1` gibi hız bayrakları.
-- [ ] **Donanım hızlandırma (Raspberry Pi):** Pi 4'te `h264_v4l2m2m` gerçek zamanlı ile saatler arası fark demek; açılışta capability probe yapılmalı (Pi 5'te H.264 HW encoder yok), compose'a `/dev/video*` device mapping eklenmeli.
-- [ ] **Disk alanı kontrolü:** dönüştürme öncesi/sırasında `shutil.disk_usage` kontrolü + UI'da disk kullanımı göstergesi (Pi'de kritik).
-- [ ] **Otomatik temizlik (retention) worker'ı:** modeli zaten var olan `AutoCleanupSettings`'i gerçekten uygulayan periyodik görev — eski çıktılar ve terminal iş kayıtları budansın.
-- [ ] **Batch UI:** backend `/api/v1/batches` özetleri hazır ve frontend çekiyor ama render etmiyor; batch bazlı ilerleme kartı + batch bazlı cancel/retry/archive/delete endpoint'leri.
+- [x] **İş detay paneli** (P3'teki maddenin genişletilmişi): canlı log tail, timeline, fps/speed/bitrate grafiği — veriler zaten modelde var.
+- [x] **Otomatik retry + backoff:** `attempt_count` alanı mevcut ama hiçbir şey tüketmiyor; geçici ffmpeg hataları insan müdahalesi olmadan (sınırlı deneme ile) yeniden denenmeli.
+- [x] **Kalite/çözünürlük kontrolleri:** CRF/preset/ses bitrate'i şu an hardcoded; iş modeline kalite (CRF veya hedef bitrate), çözünürlük (1080p/720p/orijinal) ve encoder preset alanları eklenmeli. VP9 için `-row-mt 1` gibi hız bayrakları.
+- [x] **Donanım hızlandırma (Raspberry Pi):** Pi 4'te `h264_v4l2m2m` gerçek zamanlı ile saatler arası fark demek; açılışta capability probe yapılmalı (Pi 5'te H.264 HW encoder yok), compose'a `/dev/video*` device mapping eklenmeli.
+- [x] **Disk alanı kontrolü:** dönüştürme öncesi/sırasında `shutil.disk_usage` kontrolü + UI'da disk kullanımı göstergesi (Pi'de kritik).
+- [x] **Otomatik temizlik (retention) worker'ı:** modeli zaten var olan `AutoCleanupSettings`'i gerçekten uygulayan periyodik görev — eski çıktılar ve terminal iş kayıtları budansın.
+- [x] **Batch UI:** backend `/api/v1/batches` özetleri hazır ve frontend çekiyor ama render etmiyor; batch bazlı ilerleme kartı + batch bazlı cancel/retry/archive/delete endpoint'leri.
 
 ### Orta Değerli
-- [ ] **Çıktı önizleme:** thumbnail üretimi (tek ffmpeg karesi) + tarayıcıda `Accept-Ranges` destekli stream önizleme endpoint'i.
-- [ ] **Tekil çıktı silme** (`DELETE /outputs/{filename}`) — şu an ya hepsi ya hiçbiri; iş kaydından çıktıya doğrudan link.
-- [ ] **Kuyruk pozisyonu / ETA:** kuyruktaki her işin sırası (`LPOS`) ve tahmini başlama süresi UI'da gösterilsin.
-- [ ] **Worker heartbeat:** Redis'te heartbeat anahtarı — takılmış worker "sağlıklı" görünmesin; ffmpeg stall detection (ilerleme durursa timeout).
-- [ ] **Kalıcı iş logları:** 50 satırlık log_tail yerine tam ffmpeg stderr'i `logs/` altına dosya olarak yazılsın (dizin zaten oluşturuluyor, hiç kullanılmıyor).
-- [ ] **Light tema + `prefers-color-scheme`** desteği (Settings'teki ölü kontrol gerçek olsun).
-- [ ] **Debounce'lu arama + URL'de kalıcı filtreler**, sort/sourceType kontrolleri.
+- [x] **Çıktı önizleme:** thumbnail üretimi (tek ffmpeg karesi) + tarayıcıda `Accept-Ranges` destekli stream önizleme endpoint'i.
+- [x] **Tekil çıktı silme** (`DELETE /outputs/{filename}`) — şu an ya hepsi ya hiçbiri; iş kaydından çıktıya doğrudan link.
+- [x] **Kuyruk pozisyonu / ETA:** kuyruktaki her işin sırası (`LPOS`) ve tahmini başlama süresi UI'da gösterilsin.
+- [x] **Worker heartbeat:** Redis'te heartbeat anahtarı — takılmış worker "sağlıklı" görünmesin; ffmpeg stall detection (ilerleme durursa timeout).
+- [x] **Kalıcı iş logları:** 50 satırlık log_tail yerine tam ffmpeg stderr'i `logs/` altına dosya olarak yazılsın (dizin zaten oluşturuluyor, hiç kullanılmıyor).
+- [x] **Light tema + `prefers-color-scheme`** desteği (Settings'teki ölü kontrol gerçek olsun).
+- [x] **Debounce'lu arama + URL'de kalıcı filtreler**, sort/sourceType kontrolleri.
 
 ### Düşük Öncelikli / Vitrin
-- [ ] PWA manifest + favicon + self-host fontlar (ev sunucusu uygulaması için ideal).
-- [ ] İş önceliği (tek FIFO yerine öncelik kuyruğu).
-- [ ] Sürükle-bırak dosya yükleme (şu an yalnızca sunucu tarafı tarama var).
-- [ ] Operatör denetim kaydı (kim neyi iptal etti/sildi/parola değiştirdi).
-- [ ] i18n altyapısı (TR/EN dil seçeneği).
+- [x] PWA manifest + favicon + self-host fontlar (ev sunucusu uygulaması için ideal).
+- [x] İş önceliği (tek FIFO yerine öncelik kuyruğu).
+- [x] Sürükle-bırak dosya yükleme (şu an yalnızca sunucu tarafı tarama var).
+- [x] Operatör denetim kaydı (kim neyi iptal etti/sildi/parola değiştirdi).
+- [x] i18n altyapısı (TR/EN dil seçeneği).
 
 ---
 

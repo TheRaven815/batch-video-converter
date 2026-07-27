@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 
 import type {
   ExportSettings,
+  BatchSummaryDto,
   JobFilters,
   JobRecord,
   JobStatus,
@@ -43,6 +44,7 @@ export interface AppContextValue {
   setFilters: Dispatch<SetStateAction<JobFilters>>;
   summary: Record<JobStatus | 'all', number>;
   outputs: OutputFileDto[];
+  batches: BatchSummaryDto[];
   workerHealth: WorkerHealthResponse | null;
   hasNextJobs: boolean;
   hasNextOutputs: boolean;
@@ -52,6 +54,8 @@ export interface AppContextValue {
   handleCancelJob: (id: string) => void;
   handleDeleteJob: (id: string) => void;
   handleClearOutputs: () => void;
+  handleDeleteOutput: (filename: string) => void;
+  runBatchAction: (batchId: string, action: 'cancel' | 'retry' | 'archive' | 'delete') => void;
   showToast: (message: string, kind?: ToastKind) => void;
   presets: LocalPreset[];
   editingPresetId: string | null;

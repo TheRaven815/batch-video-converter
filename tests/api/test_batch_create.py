@@ -19,8 +19,14 @@ class _FakeRedis:
     def get(self, key: str) -> str | None:
         return self.values.get(key)
 
-    def set(self, key: str, value: str, ex: int | None = None) -> None:
+    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
+        return True
+
+    def delete(self, key: str) -> int:
+        return int(self.values.pop(key, None) is not None)
 
 
 class _CapturingJobRepository:
@@ -95,6 +101,28 @@ def test_create_jobs_batch_reuses_idempotency_key_response(
     assert [job.id for job in second.jobs] == [job.id for job in first.jobs]
     assert second.idempotency_key == "repeat-click"
     assert fake_repository.enqueued_batches == [[job.id for job in first.jobs]]
+
+
+def test_idempotency_keys_are_scoped_to_authenticated_actor(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    media_root = tmp_path / "media"
+    media_root.mkdir(parents=True)
+    (media_root / "one.mp4").write_text("video", encoding="utf-8")
+    _patch_media_root(monkeypatch, media_root)
+
+    fake_repository = _CapturingJobRepository()
+    monkeypatch.setattr(api, "job_repository", fake_repository)
+    monkeypatch.setattr(api, "storage_client", _FakeRedis())
+    payload = JobBatchCreateRequest(
+        jobs=[JobCreateRequest(source_root_key="root", source_path="one.mp4")]
+    )
+
+    alice = api.create_jobs_batch(payload, idempotency_key="same-key", actor="alice")
+    bob = api.create_jobs_batch(payload, idempotency_key="same-key", actor="bob")
+
+    assert alice.jobs[0].id != bob.jobs[0].id
+    assert len(fake_repository.enqueued_batches) == 2
 
 
 def test_create_jobs_batch_raises_when_all_items_fail_validation(

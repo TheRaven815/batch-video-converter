@@ -1,14 +1,16 @@
 import React, { useEffect } from 'react';
 import type {
+  BatchSummaryDto,
   JobStatus,
   JobRecord,
   JobFilters,
   OutputFileDto,
   WorkerHealthResponse,
 } from '../models';
+import { downloadJobLog, downloadOutput, getProtectedMediaUrl } from '../api';
 import { statusVariant, getProgress, formatEta, formatDate, formatBytes } from '../utils/helpers';
 import { statusLabels } from '../utils/constants';
-import { Trash2, Download, Layers, Archive, Cpu, X } from 'lucide-react';
+import { Trash2, Download, Layers, Archive, Cpu, X, Play, FileText } from 'lucide-react';
 
 export function HealthPill({ label, ok, meta }: { label: string; ok: boolean; meta?: string }) {
   return (
@@ -178,6 +180,7 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
   const isRunning = statusVariant(job.status) === 'running';
   const timeline = Array.isArray(job.timeline) ? job.timeline : [];
   const logTail = Array.isArray(job.log_tail) ? job.log_tail : [];
+  const telemetry = Array.isArray(job.telemetry_history) ? job.telemetry_history : [];
 
   return (
     <>
@@ -225,7 +228,22 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
             <DetailItem label="Created" value={formatDate(job.created_at)} />
             <DetailItem label="Started" value={formatDate(job.started_at)} />
             <DetailItem label="Finished" value={formatDate(job.finished_at)} />
-            <DetailItem label="Output" value={job.output_filename || '—'} mono />
+            <DetailItem
+              label="Output"
+              value={
+                job.output_filename ? (
+                  <button
+                    className="detail-link"
+                    onClick={() => void downloadOutput(job.output_filename!)}
+                  >
+                    {job.output_filename}
+                  </button>
+                ) : (
+                  '—'
+                )
+              }
+              mono
+            />
           </div>
         </div>
 
@@ -238,6 +256,28 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
               <DetailItem label="Bitrate" value={job.progress_bitrate ?? '—'} mono />
               <DetailItem label="ETA" value={formatEta(job.progress_eta_seconds)} mono />
             </div>
+          </div>
+        )}
+
+        {telemetry.length > 1 && (
+          <div className="detail-section">
+            <span className="detail-section-title">Progress History</span>
+            <svg
+              className="telemetry-chart"
+              viewBox="0 0 300 90"
+              role="img"
+              aria-label="Conversion progress over time"
+            >
+              <polyline
+                points={telemetry
+                  .map((point, index) => {
+                    const x = (index / Math.max(1, telemetry.length - 1)) * 300;
+                    const y = 86 - (Number(point.progress_percent ?? 0) / 100) * 82;
+                    return `${x},${y}`;
+                  })
+                  .join(' ')}
+              />
+            </svg>
           </div>
         )}
 
@@ -264,7 +304,16 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
         )}
 
         <div className="detail-section">
-          <span className="detail-section-title">FFmpeg Log (last {logTail.length} lines)</span>
+          <div className="detail-section-header">
+            <span className="detail-section-title">FFmpeg Log (last {logTail.length} lines)</span>
+            <button
+              className="btn btn-outline"
+              onClick={() => void downloadJobLog(job.id)}
+              title="Download complete FFmpeg log"
+            >
+              <FileText size={12} /> Full log
+            </button>
+          </div>
           {logTail.length ? (
             <pre className="log-box">{logTail.join('\n')}</pre>
           ) : (
@@ -283,11 +332,13 @@ export function OutputsPanel({
   compact = false,
   onClear,
   onDownload,
+  onDelete,
 }: {
   outputs: OutputFileDto[];
   compact?: boolean;
   onClear?: () => void;
   onDownload?: (filename: string) => void;
+  onDelete?: (filename: string) => void;
 }) {
   return (
     <div className="sidebar-panel">
@@ -314,6 +365,10 @@ export function OutputsPanel({
         {outputs.length ? (
           outputs.slice(0, compact ? 6 : 20).map((output) => (
             <div className="output-item" key={output.filename}>
+              <OutputThumbnail
+                path={output.thumbnail_url}
+                alt={`Thumbnail for ${output.filename}`}
+              />
               <div className="output-item-info">
                 <p className="text-xs font-medium text-zinc-300 truncate" title={output.filename}>
                   {output.filename}
@@ -323,6 +378,19 @@ export function OutputsPanel({
                 </span>
               </div>
               <button
+                onClick={() => {
+                  if (!output.preview_url) return;
+                  void getProtectedMediaUrl(output.preview_url).then((url) =>
+                    window.open(url, '_blank', 'noopener,noreferrer'),
+                  );
+                }}
+                className="output-btn"
+                title="Preview"
+                aria-label={`Preview ${output.filename}`}
+              >
+                <Play size={12} />
+              </button>
+              <button
                 onClick={() => onDownload?.(output.filename)}
                 className="output-btn"
                 title="Download"
@@ -330,6 +398,16 @@ export function OutputsPanel({
               >
                 <Download size={12} />
               </button>
+              {onDelete && (
+                <button
+                  onClick={() => onDelete(output.filename)}
+                  className="output-btn"
+                  title="Delete"
+                  aria-label={`Delete ${output.filename}`}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
             </div>
           ))
         ) : (
@@ -342,12 +420,27 @@ export function OutputsPanel({
   );
 }
 
+function OutputThumbnail({ path, alt }: { path?: string | null; alt: string }) {
+  const [url, setUrl] = React.useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (path) {
+      void getProtectedMediaUrl(path).then((resolved) => active && setUrl(resolved));
+    }
+    return () => {
+      active = false;
+    };
+  }, [path]);
+  return url ? <img className="output-thumbnail" src={url} alt={alt} loading="lazy" /> : null;
+}
+
 export function SystemResourcesPanel({
   workerHealth,
 }: {
   workerHealth: WorkerHealthResponse | null;
 }) {
   const cpuPercent = workerHealth?.cpu_percent ?? 0;
+  const diskPercent = workerHealth?.disk_used_percent ?? 0;
 
   return (
     <div className="sidebar-panel">
@@ -378,6 +471,27 @@ export function SystemResourcesPanel({
             style={{ width: `${cpuPercent}%`, backgroundColor: 'var(--brand-500)' }}
           ></div>
         </div>
+      </div>
+      <div className="resource-item">
+        <div className="resource-label">
+          <span>Disk</span>
+          <span className="font-mono">{formatBytes(workerHealth?.disk_free_bytes ?? 0)} free</span>
+        </div>
+        <div className="resource-track">
+          <div
+            className="resource-fill"
+            style={{
+              width: `${diskPercent}%`,
+              backgroundColor: diskPercent > 90 ? 'var(--rose-500)' : 'var(--emerald-500)',
+            }}
+          />
+        </div>
+      </div>
+      <div className="resource-label">
+        <span>Worker heartbeat</span>
+        <span className={workerHealth?.worker_online ? 'text-emerald-400' : 'text-rose-400'}>
+          {workerHealth?.worker_online ? 'Online' : 'Offline'}
+        </span>
       </div>
 
       <div className="resource-item">
@@ -646,7 +760,9 @@ export function JobList({
                   </div>
                 </td>
                 <td className="font-mono text-zinc-400 text-xs">
-                  {job.video_export}/{job.audio_export}
+                  {job.status === 'queued' && job.queue_position
+                    ? `#${job.queue_position} · ETA ${formatEta(job.estimated_start_seconds).replace('ETA ', '')}`
+                    : `${job.video_export}/${job.audio_export}`}
                 </td>
                 <td>
                   <StatusBadge status={job.status} />
@@ -690,6 +806,64 @@ export function JobList({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+export function BatchPanel({
+  batches,
+  onAction,
+}: {
+  batches: BatchSummaryDto[];
+  onAction: (batchId: string, action: 'cancel' | 'retry' | 'archive' | 'delete') => void;
+}) {
+  if (!batches.length) return null;
+  return (
+    <div className="panel batch-panel">
+      <div className="sidebar-header">
+        <span className="sidebar-title">
+          <Layers size={14} /> Recent Batches
+        </span>
+      </div>
+      <div className="batch-grid">
+        {batches.slice(0, 8).map((batch) => (
+          <article className="batch-card" key={batch.batch_id}>
+            <div className="resource-label">
+              <strong className="font-mono">{batch.batch_id.slice(0, 8)}</strong>
+              <span>{batch.progress_percent}%</span>
+            </div>
+            <div className="progress-track">
+              <div
+                className="progress-fill running"
+                style={{ width: `${batch.progress_percent}%` }}
+              />
+            </div>
+            <p className="text-xs text-zinc-500">
+              {batch.completed} done · {batch.running} running · {batch.failed} failed
+            </p>
+            <div className="batch-actions">
+              <button
+                className="btn btn-outline"
+                onClick={() => onAction(batch.batch_id, 'cancel')}
+              >
+                Cancel
+              </button>
+              <button className="btn btn-outline" onClick={() => onAction(batch.batch_id, 'retry')}>
+                Retry
+              </button>
+              <button
+                className="btn btn-outline"
+                onClick={() => onAction(batch.batch_id, 'archive')}
+              >
+                Archive
+              </button>
+              <button className="btn btn-danger" onClick={() => onAction(batch.batch_id, 'delete')}>
+                Delete
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useLocation, useParams } from 'wouter';
 import { downloadOutput } from '../api';
 import {
   JobControls,
+  BatchPanel,
   JobDetailDrawer,
   JobList,
   OutputsPanel,
@@ -85,6 +86,7 @@ export default function DashboardPage() {
               )
             }
             onClear={app.handleClearOutputs}
+            onDelete={app.handleDeleteOutput}
           />
           {app.hasNextOutputs && (
             <button className="btn btn-outline load-more" onClick={app.loadMoreOutputs}>
@@ -94,6 +96,7 @@ export default function DashboardPage() {
           <SystemResourcesPanel workerHealth={app.workerHealth} />
         </div>
       </div>
+      <BatchPanel batches={app.batches} onAction={app.runBatchAction} />
 
       <JobDetailDrawer job={detailJob} onClose={() => navigate('/dashboard')} />
     </>

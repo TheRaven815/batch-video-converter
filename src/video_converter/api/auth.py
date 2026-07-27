@@ -33,6 +33,25 @@ router = APIRouter(
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 logger = logging.getLogger(__name__)
 
+
+def _append_security_audit(actor: str, action: str, target: str) -> None:
+    configured = get_settings()
+    logs_dir = getattr(configured, "logs_dir", None)
+    if logs_dir is None:
+        return
+    path = logs_dir / "audit.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "actor": actor,
+        "action": action,
+        "target": target,
+        "details": {},
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event) + "\n")
+
+
 INVALID_CREDENTIALS_MESSAGE = "Invalid username or password"
 INVALID_TOKEN_MESSAGE = "Could not validate credentials"
 AUTH_NOT_CONFIGURED_MESSAGE = (
@@ -401,4 +420,10 @@ async def update_credentials(
         "credentials_updated_at": int(time.time()),
     }
     await _maybe_await(get_storage().set(AUTH_CREDENTIALS_KEY, json.dumps(new_creds)))
+    await asyncio.to_thread(
+        _append_security_audit,
+        current_user,
+        "credentials.update",
+        str(new_creds["username"]),
+    )
     return {"status": "ok"}

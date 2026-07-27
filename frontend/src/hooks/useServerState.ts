@@ -7,6 +7,7 @@ import {
   getStreamTicket,
   getWorkerHealth,
   listJobs,
+  listBatches,
   listMediaRoots,
   listOutputs,
 } from '../api';
@@ -18,6 +19,7 @@ export const serverKeys = {
   jobs: ['server', 'jobs'] as const,
   outputs: ['server', 'outputs'] as const,
   roots: ['server', 'media-roots'] as const,
+  batches: ['server', 'batches'] as const,
 };
 
 export function useServerState(enabled: boolean) {
@@ -46,6 +48,12 @@ export function useServerState(enabled: boolean) {
     queryFn: ({ pageParam }) => listOutputs(50, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
+    enabled,
+    refetchInterval: streamState === 'live' ? false : pollMs,
+  });
+  const batchesQuery = useQuery({
+    queryKey: serverKeys.batches,
+    queryFn: () => listBatches(50),
     enabled,
     refetchInterval: streamState === 'live' ? false : pollMs,
   });
@@ -138,6 +146,7 @@ export function useServerState(enabled: boolean) {
       queryClient.invalidateQueries({ queryKey: serverKeys.outputs }),
       queryClient.invalidateQueries({ queryKey: serverKeys.health }),
       queryClient.invalidateQueries({ queryKey: serverKeys.roots }),
+      queryClient.invalidateQueries({ queryKey: serverKeys.batches }),
     ]);
     setLastSync(new Date().toISOString());
   };
@@ -146,6 +155,7 @@ export function useServerState(enabled: boolean) {
     roots: rootsQuery.data ?? [],
     jobs: jobsQuery.data?.pages.flatMap((page) => page.jobs) ?? [],
     outputs: outputsQuery.data?.pages.flatMap((page) => page.outputs) ?? [],
+    batches: batchesQuery.data?.batches ?? [],
     workerHealth: healthQuery.data?.worker ?? null,
     apiHealthy: healthQuery.data?.live.status === 'ok',
     redisHealthy: healthQuery.data?.ready.redis === 'ok',
