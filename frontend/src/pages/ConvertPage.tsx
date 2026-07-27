@@ -96,7 +96,7 @@ export default function ConvertPage() {
   };
 
   return (
-    <div className="form-container">
+    <div className="form-container convert-page">
       <div>
         <h1 className="text-lg font-semibold tracking-tight text-zinc-50">{t('convert.title')}</h1>
         <p className="text-xs text-zinc-400 mt-1">{t('convert.subtitle')}</p>

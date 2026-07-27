@@ -29,7 +29,7 @@ export default function PresetsPage() {
   } as const;
 
   return (
-    <div className="form-container">
+    <div className="form-container presets-page">
       <div>
         <h1 className="text-lg font-semibold tracking-tight text-zinc-50">{t('presets.title')}</h1>
         <p className="text-xs text-zinc-400 mt-1">{t('presets.subtitle')}</p>
@@ -38,7 +38,7 @@ export default function PresetsPage() {
         <span className="form-section-title border-b pb-2">
           {app.editingPresetId ? t('presets.edit') : t('presets.create')}
         </span>
-        <div className="form-grid mt-4">
+        <div className="form-grid preset-identity-grid mt-4">
           <TextField
             label={t('presets.name')}
             value={app.presetName}
@@ -51,7 +51,7 @@ export default function PresetsPage() {
           />
         </div>
         <span className="form-section-title border-b pb-2 mt-4">{t('presets.exportOptions')}</span>
-        <div className="form-grid mt-4">
+        <div className="form-grid preset-options-grid mt-4">
           <PresetSelect
             label={t('convert.videoFormat')}
             value={app.presetSettings.video_export}

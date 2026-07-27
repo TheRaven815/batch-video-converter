@@ -6,7 +6,7 @@ export default function SettingsPage() {
   const { showToast } = useAppContext();
   const { t } = useI18n();
   return (
-    <div className="form-container">
+    <div className="form-container settings-page">
       <div>
         <h1 className="text-lg font-semibold tracking-tight text-zinc-50">{t('settings.title')}</h1>
         <p className="text-xs text-zinc-400 mt-1">{t('settings.subtitle')}</p>
