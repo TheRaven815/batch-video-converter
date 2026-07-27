@@ -459,7 +459,7 @@ export default function ConvertPage() {
             ]}
           />
         </div>
-        <div className="border-t border-zinc-800 pt-4 flex items-center justify-end gap-2">
+        <div className="convert-actions border-t border-zinc-800 pt-4 flex items-center justify-end gap-2">
           <button className="btn btn-outline" onClick={() => navigate('/dashboard')}>
             {t('common.cancel')}
           </button>

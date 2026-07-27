@@ -737,7 +737,7 @@ export function JobList({
                 className={`row-clickable ${isSelected ? 'selected' : ''}`}
                 onClick={() => onOpenDetail(job)}
               >
-                <td onClick={(e) => e.stopPropagation()}>
+                <td className="job-select-cell" onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"
                     className="form-checkbox"
@@ -753,7 +753,7 @@ export function JobList({
                     }}
                   />
                 </td>
-                <td>
+                <td className="job-name-cell">
                   <div
                     className="font-medium text-zinc-200 truncate"
                     style={{ maxWidth: '240px' }}
@@ -762,10 +762,10 @@ export function JobList({
                     {name}
                   </div>
                 </td>
-                <td className="font-mono text-zinc-400 text-xs truncate">
+                <td className="job-profile-cell font-mono text-zinc-400 text-xs truncate">
                   {job.profile || t('common.default')}
                 </td>
-                <td>
+                <td className="job-progress-cell">
                   <div className="progress-container">
                     <div className="progress-text">
                       <span>{progress}%</span>
@@ -781,15 +781,19 @@ export function JobList({
                     </div>
                   </div>
                 </td>
-                <td className="font-mono text-zinc-400 text-xs">
+                <td className="job-target-cell font-mono text-zinc-400 text-xs">
                   {job.status === 'queued' && job.queue_position
                     ? `#${job.queue_position} · ${formatEta(job.estimated_start_seconds, language)}`
                     : `${job.video_export}/${job.audio_export}`}
                 </td>
-                <td>
+                <td className="job-status-cell">
                   <StatusBadge status={job.status} />
                 </td>
-                <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                <td
+                  className="job-action-cell"
+                  style={{ textAlign: 'right' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {variant === 'queued' || variant === 'running' ? (
                     <button
                       onClick={() => onCancelJob(job.id)}

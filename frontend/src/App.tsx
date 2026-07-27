@@ -1,5 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { LogOut, Menu, RotateCw, Video, X } from 'lucide-react';
+import {
+  LayoutDashboard,
+  LogOut,
+  RotateCw,
+  Settings,
+  SlidersHorizontal,
+  Video,
+  WandSparkles,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Link, Redirect, Route, Switch, useLocation } from 'wouter';
 
@@ -107,7 +115,6 @@ export function App() {
   const [presetName, setPresetName] = useState('');
   const [presetDescription, setPresetDescription] = useState('');
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const showToast = useCallback((message: string, kind: ToastKind = 'info') => {
     toast[kind](message, { id: `${kind}:${message}` });
   }, []);
@@ -182,19 +189,6 @@ export function App() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [filters]);
-
-  useEffect(() => {
-    if (!isMobileMenuOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsMobileMenuOpen(false);
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    document.body.classList.add('drawer-open');
-    return () => {
-      window.removeEventListener('keydown', closeOnEscape);
-      document.body.classList.remove('drawer-open');
-    };
-  }, [isMobileMenuOpen]);
 
   const filteredJobs = useMemo(
     () =>
@@ -566,56 +560,39 @@ export function App() {
       <header className="app-header">
         <div className="header-container">
           <div className="header-left">
-            <button className="mobile-menu-btn" onClick={() => setIsMobileMenuOpen(true)}>
-              <Menu size={20} />
-            </button>
             <div className="brand">
               <div className="brand-icon">
                 <Video size={16} />
               </div>
-              <span className="font-semibold text-sm tracking-tight text-zinc-100 hidden-xs">
+              <span className="brand-name font-semibold text-sm tracking-tight text-zinc-100">
                 {t('app.name')}
               </span>
               <span className="brand-version hidden-xs">v{__APP_VERSION__}</span>
             </div>
-            <nav className={`nav-tabs ${isMobileMenuOpen ? 'mobile-open' : ''}`}>
-              <div className="mobile-nav-header">
-                <span className="font-semibold text-zinc-100">{t('nav.menu')}</span>
-                <button
-                  className="btn-icon"
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  aria-label={t('nav.close')}
-                >
-                  <X size={18} />
-                </button>
-              </div>
+            <nav className="nav-tabs">
               {[
-                ['/dashboard', t('nav.dashboard')],
-                ['/convert', t('nav.convert')],
-                ['/presets', t('nav.presets')],
-                ['/settings', t('nav.settings')],
-              ].map(([path, label]) => (
-                <Link
-                  key={path}
-                  href={path}
-                  className={`nav-tab ${
-                    location === path || (path === '/dashboard' && location.startsWith('/jobs/'))
-                      ? 'active'
-                      : ''
-                  }`}
-                  onClick={() => setIsMobileMenuOpen(false)}
-                >
-                  {label}
-                </Link>
-              ))}
+                ['/dashboard', t('nav.dashboard'), LayoutDashboard],
+                ['/convert', t('nav.convert'), WandSparkles],
+                ['/presets', t('nav.presets'), SlidersHorizontal],
+                ['/settings', t('nav.settings'), Settings],
+              ].map(([path, label, Icon]) => {
+                const NavIcon = Icon as typeof LayoutDashboard;
+                return (
+                  <Link
+                    key={path as string}
+                    href={path as string}
+                    className={`nav-tab ${
+                      location === path || (path === '/dashboard' && location.startsWith('/jobs/'))
+                        ? 'active'
+                        : ''
+                    }`}
+                  >
+                    <NavIcon className="nav-icon" size={15} aria-hidden="true" />
+                    <span>{label as string}</span>
+                  </Link>
+                );
+              })}
             </nav>
-            {isMobileMenuOpen && (
-              <button
-                className="mobile-overlay"
-                onClick={() => setIsMobileMenuOpen(false)}
-                aria-label={t('nav.close')}
-              />
-            )}
           </div>
           <div className="header-right">
             <div className="service-status">
@@ -632,29 +609,31 @@ export function App() {
               />
             </div>
             <button
-              className="btn btn-outline"
+              className="btn btn-outline header-action"
               onClick={() =>
                 void server.refreshAll().then(() => showToast(t('toast.refreshSuccess'), 'success'))
               }
               disabled={server.jobsRefreshing}
+              title={t('common.refresh')}
             >
               <RotateCw size={14} className={server.jobsRefreshing ? 'spin' : ''} />
               <span className="hidden-xs">{t('common.refresh')}</span>
             </button>
             <button
-              className="btn btn-outline"
+              className="btn btn-outline header-action language-action"
               onClick={toggleLanguage}
               aria-label={t('nav.changeLanguage')}
             >
               {language.toUpperCase()}
             </button>
             <button
-              className="btn btn-outline"
+              className="btn btn-outline header-action"
               onClick={() => {
                 setAuthToken(null);
                 window.location.reload();
               }}
               aria-label={t('nav.signOut')}
+              title={t('nav.signOut')}
             >
               <LogOut size={14} />
             </button>
