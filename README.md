@@ -229,7 +229,8 @@ Coolify/Portainer, VPS deployments, and Raspberry Pi:
 - `app` supervises Uvicorn and the Python worker through `entrypoint.sh`.
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
 - `APP_DATA_SOURCE` can be a bind path such as `./data` or the `app-data`
-  named volume.
+  named volume. It is mounted at `/app-data` inside the container to avoid
+  conflicts with platform-managed `/data` storage.
 - Redis persistence uses the separate `redis-data` named volume.
 - All media mounts are read-only and their host paths are configured with
   `MEDIA_MOVIES_SOURCE`, `MEDIA_SERIES_SOURCE`, and
@@ -277,7 +278,7 @@ bound to loopback only; application traffic uses the private Compose network.
 | --- | --- | --- |
 | `APP_IMAGE` | `batch-video-converter:local` | Image name/tag. Set a pinned GHCR tag when deploying a prebuilt release. |
 | `APP_PORT` | `8765` | Host port mapped to container port 8765. |
-| `APP_DATA_SOURCE` | `./data` | Host data path or the `app-data` named volume. |
+| `APP_DATA_SOURCE` | `./data` | Host data path or the `app-data` named volume; mounted at `/app-data`. |
 | `MEDIA_MOVIES_SOURCE` | `./media/movies` | Host path mounted read-only at `/media/movies`. |
 | `MEDIA_SERIES_SOURCE` | `./media/series` | Host path mounted read-only at `/media/series`. |
 | `MEDIA_DOWNLOADS_SOURCE` | `./media/downloads` | Host path mounted read-only at `/media/downloads`. |

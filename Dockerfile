@@ -12,8 +12,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
     VIDEO_CONVERTER_STORAGE=redis \
-    DATA_ROOT=/data \
-    MEDIA_MOUNTS=Media=/data/input
+    DATA_ROOT=/app-data \
+    MEDIA_MOUNTS=Media=/app-data/input
 
 WORKDIR /app
 
@@ -21,8 +21,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 app \
-    && mkdir -p /data \
-    && chown app:app /data
+    && mkdir -p /app-data \
+    && chown app:app /app-data
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt

@@ -7,7 +7,9 @@ services:
     environment:
       VIDEO_CONVERTER_STORAGE: ${VIDEO_CONVERTER_STORAGE:-redis}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      DATA_ROOT: /data
+      # Avoid /data because Coolify may reserve that target for its own
+      # persistent storage and hide this service's configured bind mount.
+      DATA_ROOT: /app-data
       MEDIA_MOUNTS: ${MEDIA_MOUNTS:-Movies=/media/movies;Series=/media/series;Downloads=/media/downloads}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       FFMPEG_THREADS: ${FFMPEG_THREADS:-1}
@@ -22,7 +24,7 @@ services:
     volumes:
       # APP_DATA_SOURCE accepts either a host path (./data) or the declared
       # app-data named volume, which is useful for Coolify/Portainer.
-      - ${APP_DATA_SOURCE:-./data}:/data
+      - ${APP_DATA_SOURCE:-./data}:/app-data
       - ${MEDIA_MOVIES_SOURCE:-./media/movies}:/media/movies:ro
       - ${MEDIA_SERIES_SOURCE:-./media/series}:/media/series:ro
       - ${MEDIA_DOWNLOADS_SOURCE:-./media/downloads}:/media/downloads:ro
