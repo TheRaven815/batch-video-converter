@@ -417,7 +417,9 @@ class LocalFileStore:
                 conn.execute("ROLLBACK")
                 raise
 
-    def pipeline(self, transaction: bool = True) -> LocalPipeline:  # noqa: ARG002 - mirrors redis-py API.
+    def pipeline(
+        self, transaction: bool = True
+    ) -> LocalPipeline:  # noqa: ARG002 - mirrors redis-py API.
         return LocalPipeline(self)
 
     def _lpop(self, key: str) -> str | None:

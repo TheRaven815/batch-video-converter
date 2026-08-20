@@ -577,6 +577,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tools/mp4-fix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mp4 Fix */
+        post: operations["mp4_fix_api_v1_tools_mp4_fix_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -614,7 +631,9 @@ export interface components {
             /** Target */
             target: string;
             /** Details */
-            details?: Record<string, never>;
+            details?: {
+                [key: string]: unknown;
+            };
         };
         /** AutoCleanupSettings */
         AutoCleanupSettings: {
@@ -796,13 +815,20 @@ export interface components {
              */
             recoverable: boolean;
             /** Details */
-            details?: Record<string, never> | null;
+            details?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ExportProfile
          * @enum {string}
          */
         ExportProfile: "h264_mp4" | "h265_mp4" | "vp9_webm";
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
         /**
          * HardwareAcceleration
          * @enum {string}
@@ -893,10 +919,16 @@ export interface components {
             audio_stream_indexes?: number[] | null;
             /** Subtitle Stream Indexes */
             subtitle_stream_indexes?: number[] | null;
-            /** Audio Channel Mode */
-            audio_channel_mode?: string | null;
-            /** Skip Existing Output */
-            skip_existing_output?: boolean;
+            /**
+             * Audio Channel Mode
+             * @default preserve
+             */
+            audio_channel_mode: string | null;
+            /**
+             * Skip Existing Output
+             * @default false
+             */
+            skip_existing_output: boolean;
         };
         /** JobIdsRequest */
         JobIdsRequest: {
@@ -954,7 +986,9 @@ export interface components {
             /** Log Tail */
             log_tail?: string[];
             /** Timeline */
-            timeline?: Record<string, never>[];
+            timeline?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Archived
              * @default false
@@ -1018,16 +1052,24 @@ export interface components {
             audio_stream_indexes?: number[] | null;
             /** Subtitle Stream Indexes */
             subtitle_stream_indexes?: number[] | null;
-            /** Audio Channel Mode */
-            audio_channel_mode?: string | null;
-            /** Skip Existing Output */
-            skip_existing_output?: boolean;
+            /**
+             * Audio Channel Mode
+             * @default preserve
+             */
+            audio_channel_mode: string | null;
+            /**
+             * Skip Existing Output
+             * @default false
+             */
+            skip_existing_output: boolean;
             /** Queue Position */
             queue_position?: number | null;
             /** Estimated Start Seconds */
             estimated_start_seconds?: number | null;
             /** Telemetry History */
-            telemetry_history?: Record<string, never>[];
+            telemetry_history?: {
+                [key: string]: unknown;
+            }[];
             /** Log Download Url */
             log_download_url?: string | null;
         };
@@ -1094,26 +1136,6 @@ export interface components {
             /** Label */
             label: string;
         };
-        /** MediaSubtitleProbeResponse */
-        MediaSubtitleProbeResponse: {
-            /** Root Key */
-            root_key: string;
-            /** Path */
-            path: string;
-            /** Tracks */
-            tracks: components["schemas"]["MediaSubtitleTrackDto"][];
-        };
-        /** MediaSubtitleTrackDto */
-        MediaSubtitleTrackDto: {
-            /** Index */
-            index: number;
-            /** Language */
-            language: string;
-            /** Title */
-            title?: string | null;
-            /** Codec Name */
-            codec_name?: string | null;
-        };
         /** MediaStreamEntryDto */
         MediaStreamEntryDto: {
             /** Index */
@@ -1134,11 +1156,57 @@ export interface components {
             /** Path */
             path: string;
             /** Video */
-            video: components["schemas"]["MediaStreamEntryDto"][];
+            video?: components["schemas"]["MediaStreamEntryDto"][];
             /** Audio */
-            audio: components["schemas"]["MediaStreamEntryDto"][];
+            audio?: components["schemas"]["MediaStreamEntryDto"][];
             /** Subtitle */
-            subtitle: components["schemas"]["MediaStreamEntryDto"][];
+            subtitle?: components["schemas"]["MediaStreamEntryDto"][];
+        };
+        /** MediaSubtitleProbeResponse */
+        MediaSubtitleProbeResponse: {
+            /** Root Key */
+            root_key: string;
+            /** Path */
+            path: string;
+            /** Tracks */
+            tracks: components["schemas"]["MediaSubtitleTrackDto"][];
+        };
+        /** MediaSubtitleTrackDto */
+        MediaSubtitleTrackDto: {
+            /** Index */
+            index: number;
+            /** Language */
+            language: string;
+            /** Title */
+            title?: string | null;
+            /** Codec Name */
+            codec_name?: string | null;
+        };
+        /** Mp4FixRequest */
+        Mp4FixRequest: {
+            /** Source Root Key */
+            source_root_key?: string | null;
+            /** Source Path */
+            source_path?: string | null;
+            /** Input Filename */
+            input_filename?: string | null;
+        };
+        /** Mp4FixResponse */
+        Mp4FixResponse: {
+            /**
+             * Status
+             * @default fixed
+             */
+            status: string;
+            /** Filename */
+            filename: string;
+            /** Source Path */
+            source_path?: string | null;
+            /**
+             * Message
+             * @default MP4 fixed (faststart + genpts)
+             */
+            message: string;
         };
         /** OutputFileDto */
         OutputFileDto: {
@@ -1214,20 +1282,7 @@ export interface components {
          */
         SubtitleExport: "none" | "embedded" | "separate_srt";
         /** SystemSettings */
-        "SystemSettings-Input": {
-            /**
-             * Worker Concurrency
-             * @default 1
-             */
-            worker_concurrency: number;
-            default_export?: components["schemas"]["DefaultExportSettings"];
-            auto_cleanup?: components["schemas"]["AutoCleanupSettings"];
-            retry?: components["schemas"]["RetrySettings"] | null;
-            disk_safety?: components["schemas"]["DiskSafetySettings"] | null;
-            ui?: components["schemas"]["UiPreferences"];
-        };
-        /** SystemSettings */
-        "SystemSettings-Output": {
+        SystemSettings: {
             /**
              * Worker Concurrency
              * @default 1
@@ -1265,6 +1320,15 @@ export interface components {
             input_filename: string;
             /** Size Bytes */
             size_bytes: number;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
         };
         /**
          * VideoExport
@@ -3728,58 +3792,13 @@ export interface operations {
                     "application/json": components["schemas"]["MediaStreamsProbeResponse"];
                 };
             };
-            /** @description Bad request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StructuredErrorResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StructuredErrorResponse"];
-                };
-            };
-            /** @description Resource not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StructuredErrorResponse"];
-                };
-            };
-            /** @description Validation failed */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StructuredErrorResponse"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StructuredErrorResponse"];
-                };
-            };
-            /** @description Service unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3799,7 +3818,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SystemSettings-Output"];
+                    "application/json": components["schemas"]["SystemSettings"];
                 };
             };
             /** @description Bad request */
@@ -3867,7 +3886,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SystemSettings-Input"];
+                "application/json": components["schemas"]["SystemSettings"];
             };
         };
         responses: {
@@ -3877,7 +3896,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SystemSettings-Output"];
+                    "application/json": components["schemas"]["SystemSettings"];
                 };
             };
             /** @description Bad request */
@@ -4008,6 +4027,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+        };
+    };
+    mp4_fix_api_v1_tools_mp4_fix_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Mp4FixRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Mp4FixResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

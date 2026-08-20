@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
-
-import asyncio
 
 import pytest
 from fastapi import HTTPException
@@ -25,11 +24,39 @@ class _FakeCompletedProcess:
         if payload is None:
             payload = {
                 "streams": [
-                    {"index": 0, "codec_type": "video", "codec_name": "h264", "channels": 0, "tags": {"title": "Main"}},
-                    {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": 2, "tags": {"language": "eng", "title": "English"}},
-                    {"index": 2, "codec_type": "audio", "codec_name": "ac3", "channels": 6, "tags": {"language": "tur"}},
-                    {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "eng", "title": "English SDH"}},
-                    {"index": 4, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "jpn"}},
+                    {
+                        "index": 0,
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "channels": 0,
+                        "tags": {"title": "Main"},
+                    },
+                    {
+                        "index": 1,
+                        "codec_type": "audio",
+                        "codec_name": "aac",
+                        "channels": 2,
+                        "tags": {"language": "eng", "title": "English"},
+                    },
+                    {
+                        "index": 2,
+                        "codec_type": "audio",
+                        "codec_name": "ac3",
+                        "channels": 6,
+                        "tags": {"language": "tur"},
+                    },
+                    {
+                        "index": 3,
+                        "codec_type": "subtitle",
+                        "codec_name": "subrip",
+                        "tags": {"language": "eng", "title": "English SDH"},
+                    },
+                    {
+                        "index": 4,
+                        "codec_type": "subtitle",
+                        "codec_name": "ass",
+                        "tags": {"language": "jpn"},
+                    },
                 ]
             }
         self.stdout = json.dumps(payload)
@@ -114,7 +141,7 @@ def test_media_streams_60s_cache_used(tmp_path: Path, monkeypatch: Any) -> None:
     media._streams_probe_cache.clear()
 
     monkeypatch.setattr(media.subprocess, "run", lambda *a, **k: _FakeCompletedProcess())
-    first = _run(media.probe_media_streams(root_key="root", path="movie2.mkv"))
+    _run(media.probe_media_streams(root_key="root", path="movie2.mkv"))
     # tamper cache expiry to simulate not-expired
     assert ("root", "movie2.mkv") in media._streams_probe_cache
     expiry, _ = media._streams_probe_cache[("root", "movie2.mkv")]
@@ -122,7 +149,9 @@ def test_media_streams_60s_cache_used(tmp_path: Path, monkeypatch: Any) -> None:
 
     # second payload would be different but cache returns first
     different_payload = {"streams": [{"index": 0, "codec_type": "video", "codec_name": "hevc"}]}
-    monkeypatch.setattr(media.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(payload=different_payload))
+    monkeypatch.setattr(
+        media.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(payload=different_payload)
+    )
     second = _run(media.probe_media_streams(root_key="root", path="movie2.mkv"))
     # still returns cached h264 not hevc
     assert second.video[0].codec == "h264"

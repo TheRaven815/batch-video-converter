@@ -21,7 +21,9 @@ class _FakeRedis:
     def get(self, key: str) -> str | None:
         return self.values.get(key)
 
-    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:  # noqa: ARG002
+    def set(
+        self, key: str, value: str, ex: int | None = None, nx: bool = False
+    ) -> bool:  # noqa: ARG002
         if nx and key in self.values:
             return False
         self.values[key] = value

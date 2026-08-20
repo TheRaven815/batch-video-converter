@@ -17,11 +17,38 @@ class _FakeCompletedProcess:
 def test_probe_all_streams_parses_video_audio_subtitle(monkeypatch: Any) -> None:
     payload = {
         "streams": [
-            {"index": 0, "codec_type": "video", "codec_name": "h264", "tags": {"title": "Main Video"}},
-            {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": 2, "tags": {"language": "eng", "title": "Stereo"}},
-            {"index": 2, "codec_type": "audio", "codec_name": "ac3", "channels": 6, "tags": {"language": "tur"}},
-            {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "ENG", "title": "English SDH"}},
-            {"index": 4, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "jpn"}},
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "tags": {"title": "Main Video"},
+            },
+            {
+                "index": 1,
+                "codec_type": "audio",
+                "codec_name": "aac",
+                "channels": 2,
+                "tags": {"language": "eng", "title": "Stereo"},
+            },
+            {
+                "index": 2,
+                "codec_type": "audio",
+                "codec_name": "ac3",
+                "channels": 6,
+                "tags": {"language": "tur"},
+            },
+            {
+                "index": 3,
+                "codec_type": "subtitle",
+                "codec_name": "subrip",
+                "tags": {"language": "ENG", "title": "English SDH"},
+            },
+            {
+                "index": 4,
+                "codec_type": "subtitle",
+                "codec_name": "ass",
+                "tags": {"language": "jpn"},
+            },
             {"index": 99, "codec_type": "data", "codec_name": "bin_data"},
         ]
     }
@@ -35,7 +62,13 @@ def test_probe_all_streams_parses_video_audio_subtitle(monkeypatch: Any) -> None
 
     assert result is not None
     assert len(result["video"]) == 1
-    assert result["video"][0] == {"index": 0, "codec": "h264", "language": None, "channels": None, "title": "Main Video"}
+    assert result["video"][0] == {
+        "index": 0,
+        "codec": "h264",
+        "language": None,
+        "channels": None,
+        "title": "Main Video",
+    }
     assert len(result["audio"]) == 2
     assert result["audio"][0]["language"] == "eng"
     assert result["audio"][0]["channels"] == 2
@@ -66,7 +99,13 @@ def test_probe_all_streams_returns_none_on_failure(monkeypatch: Any) -> None:
 def test_probe_all_streams_handles_channels_as_string(monkeypatch: Any) -> None:
     payload = {
         "streams": [
-            {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": "2", "tags": {"language": "eng"}},
+            {
+                "index": 1,
+                "codec_type": "audio",
+                "codec_name": "aac",
+                "channels": "2",
+                "tags": {"language": "eng"},
+            },
         ]
     }
 

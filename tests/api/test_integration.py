@@ -65,7 +65,9 @@ class _FakeRedis:
             raise api.redis.RedisError("redis unavailable")
         return True
 
-    def pipeline(self, transaction: bool = True) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
+    def pipeline(
+        self, transaction: bool = True
+    ) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
         return _Pipeline(self)
 
     def set(

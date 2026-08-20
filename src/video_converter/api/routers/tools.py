@@ -76,7 +76,9 @@ def _resolve_input_path(payload: Mp4FixRequest) -> Path:
             raise HTTPException(status_code=404, detail="Input file not found")
         return candidate
 
-    raise HTTPException(status_code=422, detail="source_root_key/source_path or input_filename required")
+    raise HTTPException(
+        status_code=422, detail="source_root_key/source_path or input_filename required"
+    )
 
 
 @router.post(

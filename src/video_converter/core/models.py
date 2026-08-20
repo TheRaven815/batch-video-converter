@@ -82,9 +82,7 @@ class JobCreateRequest(BaseModel):
     priority: int = Field(default=0, ge=-10, le=10)
     audio_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
     subtitle_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
-    audio_channel_mode: Optional[str] = Field(
-        default="preserve", pattern=r"^(preserve|downmix2)$"
-    )
+    audio_channel_mode: Optional[str] = Field(default="preserve", pattern=r"^(preserve|downmix2)$")
     skip_existing_output: bool = False
 
 
@@ -144,9 +142,7 @@ class JobRecord(BaseModel):
     priority: int = Field(default=0, ge=-10, le=10)
     audio_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
     subtitle_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
-    audio_channel_mode: Optional[str] = Field(
-        default="preserve", pattern=r"^(preserve|downmix2)$"
-    )
+    audio_channel_mode: Optional[str] = Field(default="preserve", pattern=r"^(preserve|downmix2)$")
     skip_existing_output: bool = False
     queue_position: Optional[int] = Field(default=None, ge=1)
     estimated_start_seconds: Optional[int] = Field(default=None, ge=0)

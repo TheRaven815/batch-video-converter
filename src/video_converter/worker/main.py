@@ -596,14 +596,20 @@ def _build_audio_ffmpeg_args(
         else:
             if video_export == "webm":
                 # webm fallback is opus (libopus)
-                codec_args.extend([f"-c:a:{n}", "libopus", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)])
+                codec_args.extend(
+                    [f"-c:a:{n}", "libopus", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)]
+                )
             elif video_export == "mkv":
                 # MKV should copy all, but if we are here it means unknown codec?
                 # For safety fallback to aac
-                codec_args.extend([f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)])
+                codec_args.extend(
+                    [f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)]
+                )
             else:
                 # mp4 and others -> aac
-                codec_args.extend([f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)])
+                codec_args.extend(
+                    [f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)]
+                )
     return maps, codec_args
 
 
@@ -714,7 +720,14 @@ def _ffmpeg_command(
         else:
             if subtitle_language:
                 cmd.extend(
-                    ["-map", "0:v:0", "-map", "0:a:0?", "-map", f"0:s:m:language:{subtitle_language}?"]
+                    [
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "0:a:0?",
+                        "-map",
+                        f"0:s:m:language:{subtitle_language}?",
+                    ]
                 )
             else:
                 cmd.extend(["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s:0?"])
@@ -1305,7 +1318,9 @@ def process_job(job_id: str) -> None:
                             # Unique temp per index to prevent collisions
                             temp_srt = settings.temp_dir / f"{job_id}-{idx_int}.srt"
                             temp_srt.parent.mkdir(parents=True, exist_ok=True)
-                            subtitle_output_multi = output_path.parent / f"{output_path.stem}{suffix}"
+                            subtitle_output_multi = (
+                                output_path.parent / f"{output_path.stem}{suffix}"
+                            )
                             subtitle_cmd_multi = [
                                 "ffmpeg",
                                 "-y",
@@ -1319,7 +1334,11 @@ def process_job(job_id: str) -> None:
                             ]
                             try:
                                 subtitle_proc = subprocess.run(
-                                    subtitle_cmd_multi, capture_output=True, text=True, check=False, timeout=1800
+                                    subtitle_cmd_multi,
+                                    capture_output=True,
+                                    text=True,
+                                    check=False,
+                                    timeout=1800,
                                 )
                                 if subtitle_proc.returncode == 0 and temp_srt.exists():
                                     _atomic_move(temp_srt, subtitle_output_multi)
@@ -1337,7 +1356,10 @@ def process_job(job_id: str) -> None:
                                     idx_int,
                                 )
                             except subprocess.TimeoutExpired:
-                                job_logger.warning("separate_srt export skipped for index %s: extraction timed out", idx_int)
+                                job_logger.warning(
+                                    "separate_srt export skipped for index %s: extraction timed out",
+                                    idx_int,
+                                )
                                 temp_srt.unlink(missing_ok=True)
                     else:
                         # Backward-compatible single SRT extraction (subtitle_language based)
@@ -1348,14 +1370,22 @@ def process_job(job_id: str) -> None:
                             "-i",
                             str(input_path),
                             "-map",
-                            f"0:s:m:language:{subtitle_language}?" if subtitle_language else "0:s:0?",
+                            (
+                                f"0:s:m:language:{subtitle_language}?"
+                                if subtitle_language
+                                else "0:s:0?"
+                            ),
                             "-threads",
                             str(settings.ffmpeg_threads),
                             str(temp_subtitle_path),
                         ]
                         try:
                             subtitle_proc = subprocess.run(
-                                subtitle_cmd, capture_output=True, text=True, check=False, timeout=1800
+                                subtitle_cmd,
+                                capture_output=True,
+                                text=True,
+                                check=False,
+                                timeout=1800,
                             )
                             if subtitle_proc.returncode == 0 and temp_subtitle_path.exists():
                                 _atomic_move(temp_subtitle_path, subtitle_output)

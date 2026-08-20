@@ -599,9 +599,9 @@ def test_multi_audio_copy() -> None:
     # The command should have per-stream entries, not generic
     # Generic -c:a would be second token "copy" without colon, but we allow per-stream only
     # Ensure no plain "-c:a" without colon for multi
-    for i, tok in enumerate(cmd):
+    for tok in cmd:
         if tok == "-c:a":
-            assert False, "multi-audio should use -c:a:<n> notplain -c:a"
+            raise AssertionError("multi-audio should use -c:a:<n> notplain -c:a")
     # backward compat: single audio still works (already tested above)
 
 
@@ -764,7 +764,6 @@ def test_multi_srt_lang_suffix() -> None:
 
 def test_skip_existing(tmp_path, monkeypatch) -> None:
     """skip_existing_output=True and output exists -> job marked completed without ffmpeg."""
-    from pathlib import Path
     from video_converter.core.job_repository import JobRepository
     from video_converter.core.models import JobRecord, JobStatus, now_iso
     from video_converter.core.storage import LocalFileStore
@@ -777,7 +776,12 @@ def test_skip_existing(tmp_path, monkeypatch) -> None:
     # Use tmp_path as DATA_ROOT for isolation – Settings is frozen, so replace whole object
     new_settings = worker.settings.model_copy(update={"data_root": tmp_path})
     monkeypatch.setattr(worker, "settings", new_settings)
-    for p in (new_settings.input_dir, new_settings.outputs_dir, new_settings.temp_dir, new_settings.logs_dir):
+    for p in (
+        new_settings.input_dir,
+        new_settings.outputs_dir,
+        new_settings.temp_dir,
+        new_settings.logs_dir,
+    ):
         p.mkdir(parents=True, exist_ok=True)
 
     # Create dummy input file
@@ -817,11 +821,12 @@ def test_skip_existing(tmp_path, monkeypatch) -> None:
         return (0, "")
 
     monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", fake_ffmpeg)
+
     # Also ensure probe not called unnecessarily (but still may be called before skip check)
     # Our skip check is after _resolve_input_path and before probes, so probe should NOT be called
     # To verify, monkeypatch probes to fail if called after skip
     def fail_probe(*args, **kwargs):
-        assert False, "probe should not be called when skip_existing and file exists"
+        raise AssertionError("probe should not be called when skip_existing and file exists")
 
     # Only patch ffprobe-dependent helpers that are after skip check
     # _probe_duration_seconds is after skip, so patch to catch unwanted calls
@@ -829,10 +834,17 @@ def test_skip_existing(tmp_path, monkeypatch) -> None:
 
     worker.process_job(job_id)
 
-    assert called["ffmpeg"] is False, "ffmpeg should not run when output exists and skip_existing=True"
+    assert (
+        called["ffmpeg"] is False
+    ), "ffmpeg should not run when output exists and skip_existing=True"
     updated = repo.get(job_id)
     assert updated is not None
     assert updated.status == JobStatus.completed
     assert updated.progress_percent == 100
-    assert "atland" in (updated.progress_message or "").lower() or "atland" in (updated.log_tail[-1] if updated.log_tail else "").lower() if updated.log_tail else True
+    assert (
+        "atland" in (updated.progress_message or "").lower()
+        or "atland" in (updated.log_tail[-1] if updated.log_tail else "").lower()
+        if updated.log_tail
+        else True
+    )
     store.close()
