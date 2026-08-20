@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from video_converter.api import auth, routes
 from video_converter.api.async_storage import AsyncJobRepository, create_async_storage_client
 from video_converter.api.errors import structured_http_exception_handler
-from video_converter.api.routers import audit, batches, health, jobs, media, outputs, ui
+from video_converter.api.routers import audit, batches, health, jobs, media, outputs, tools, ui
 from video_converter.api.routers import settings as settings_router
 from video_converter.core.config import ensure_runtime_dirs, get_settings
 from video_converter.core.storage import StorageError
@@ -85,6 +85,7 @@ def create_app() -> FastAPI:
         media.router,
         settings_router.router,
         audit.router,
+        tools.router,
         ui.router,
     ):
         application.include_router(route_group)

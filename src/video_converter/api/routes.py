@@ -221,6 +221,10 @@ def _build_job_record(payload: JobCreateRequest, *, batch_id: str | None = None)
         encoder_preset=payload.encoder_preset,
         hardware_acceleration=payload.hardware_acceleration,
         priority=payload.priority,
+        audio_stream_indexes=payload.audio_stream_indexes,
+        subtitle_stream_indexes=payload.subtitle_stream_indexes,
+        audio_channel_mode=payload.audio_channel_mode,
+        skip_existing_output=payload.skip_existing_output,
         log_download_url=f"/api/v1/jobs/{job_id}/log",
     )
 
@@ -1123,12 +1127,29 @@ async def clear_outputs() -> dict[str, int]:
 
     count = 0
     for child in outputs_dir.iterdir():
+        # Includes video outputs and .srt sidecars (e.g. ``<stem>.srt``).
         if child.is_file() and not child.name.startswith("."):
             try:
                 child.unlink()
                 count += 1
             except Exception as exc:
                 logger.error("Failed to delete %s: %s", child, exc)
+
+    # Remove cached thumbnails generated for previews; otherwise they accumulate
+    # indefinitely (one 480p JPEG per output).
+    thumbnails_dir = (settings.temp_dir / "thumbnails").resolve()
+    try:
+        thumbnails_dir.relative_to(settings.temp_dir.resolve())
+    except ValueError:
+        thumbnails_dir = settings.temp_dir / "thumbnails"
+    if thumbnails_dir.exists() and thumbnails_dir.is_dir():
+        for child in thumbnails_dir.iterdir():
+            if child.is_file() and not child.name.startswith("."):
+                try:
+                    child.unlink()
+                    count += 1
+                except Exception as exc:
+                    logger.error("Failed to delete thumbnail %s: %s", child, exc)
     return {"deleted": count}
 
 

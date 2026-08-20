@@ -18,26 +18,37 @@ export function formatDate(value?: string | null, language: AppLanguage = 'en'):
 }
 
 export function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  if (!bytes && bytes !== 0) return '0 B';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
   let size = bytes;
   let unit = 0;
   while (size >= 1024 && unit < units.length - 1) {
     size /= 1024;
     unit += 1;
   }
+  // Keep one decimal except for bytes.
   return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 export function formatEta(seconds?: number | null, language: AppLanguage = 'en'): string {
   const prefix = language === 'tr' ? 'Tahmini' : 'ETA';
   if (seconds === null || seconds === undefined) return `${prefix} —`;
+  if (seconds < 0) seconds = 0;
   if (seconds < 60) return `${prefix} ${seconds}${language === 'tr' ? ' sn' : 's'}`;
-  const hours = Math.floor(seconds / 3600);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  if (days > 0) {
+    if (language === 'tr') {
+      return `${prefix} ${days} gün ${hours} sa ${minutes} dk`;
+    }
+    return `${prefix} ${days}d ${hours}h ${minutes}m`;
+  }
   if (hours > 0)
     return `${prefix} ${hours} ${language === 'tr' ? 'sa' : 'h'} ${minutes} ${language === 'tr' ? 'dk' : 'm'}`;
-  return `${prefix} ${minutes} ${language === 'tr' ? 'dk' : 'm'} ${seconds % 60} ${language === 'tr' ? 'sn' : 's'}`;
+  return `${prefix} ${minutes} ${language === 'tr' ? 'dk' : 'm'} ${secs} ${language === 'tr' ? 'sn' : 's'}`;
 }
 
 export function deriveProfile(videoExport: string): ExportProfile {

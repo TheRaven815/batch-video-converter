@@ -42,6 +42,8 @@ export type MediaBrowseResponse = Omit<Schemas['MediaBrowseResponse'], 'entries'
 };
 export type MediaSubtitleTrackDto = Schemas['MediaSubtitleTrackDto'];
 export type MediaSubtitleProbeResponse = Schemas['MediaSubtitleProbeResponse'];
+export type MediaStreamEntryDto = Schemas['MediaStreamEntryDto'];
+export type MediaStreamsProbeResponse = Schemas['MediaStreamsProbeResponse'];
 export type OutputFileDto = Schemas['OutputFileDto'];
 export type OutputListResponse = Schemas['OutputListResponse'];
 export type UploadResponse = Schemas['UploadResponse'];
@@ -97,6 +99,16 @@ export interface ExportSettings {
   hardware_acceleration: HardwareAcceleration;
   max_attempts: number;
   priority: number;
+  // L-A legacy parity (optional overrides)
+  audio_stream_indexes?: number[] | null;
+  subtitle_stream_indexes?: number[] | null;
+  audio_channel_mode?: 'preserve' | 'downmix2' | null;
+  skip_existing_output?: boolean;
+  // camelCase aliases for UI convenience
+  audioStreamIndexes?: number[] | null;
+  subtitleStreamIndexes?: number[] | null;
+  audioChannelMode?: 'preserve' | 'downmix2' | null;
+  skipExistingOutput?: boolean;
 }
 
 export interface JobFilters {

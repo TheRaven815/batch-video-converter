@@ -42,6 +42,14 @@ export const defaultSettings: ExportSettings = {
   hardware_acceleration: 'auto',
   max_attempts: 3,
   priority: 0,
+  audio_stream_indexes: null,
+  subtitle_stream_indexes: null,
+  audio_channel_mode: 'preserve',
+  skip_existing_output: false,
+  audioStreamIndexes: null,
+  subtitleStreamIndexes: null,
+  audioChannelMode: 'preserve',
+  skipExistingOutput: false,
 };
 
 export function loadStoredPresets(): LocalPreset[] {

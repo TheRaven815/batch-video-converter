@@ -48,7 +48,10 @@ function extractErrorMessage(text: string): string | null {
   return null;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestWithHeaders<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ data: T; headers: Headers }> {
   const headers = new Headers(init?.headers);
   headers.set('Accept', 'application/json');
   if (init?.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
@@ -81,8 +84,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
 
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  if (response.status === 204) return { data: undefined as T, headers: response.headers };
+  return { data: (await response.json()) as T, headers: response.headers };
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const { data } = await requestWithHeaders<T>(path, init);
+  return data;
 }
 
 export async function getLiveHealth(): Promise<HealthResponse> {
@@ -119,6 +127,16 @@ export async function probeSubtitles(
   return request<MediaSubtitleProbeResponse>(`/api/v1/media/subtitles?${params.toString()}`);
 }
 
+export async function probeStreams(
+  rootKey: string,
+  path: string,
+): Promise<import('./models').MediaStreamsProbeResponse> {
+  const params = new URLSearchParams({ root_key: rootKey, path });
+  return request<import('./models').MediaStreamsProbeResponse>(
+    `/api/v1/media/streams?${params.toString()}`,
+  );
+}
+
 export async function listJobs(
   filters: Partial<JobFilters>,
   limit = 250,
@@ -132,28 +150,12 @@ export async function listJobs(
   if (filters.sourceType && filters.sourceType !== 'all')
     params.set('source_type', filters.sourceType);
 
-  const headers = new Headers();
-  headers.set('Accept', 'application/json');
-  if (authToken) {
-    headers.set('Authorization', `Bearer ${authToken}`);
-  }
-
-  const response = await fetch(`/api/v1/jobs?${params.toString()}`, { headers });
-  if (!response.ok) {
-    if (response.status === 401 && authToken) {
-      setAuthToken(null);
-      window.location.reload();
-    }
-    throw new Error(
-      translate(loadLanguage(), 'api.requestFailed', {
-        method: 'GET',
-        status: response.status,
-      }),
-    );
-  }
+  const { data, headers } = await requestWithHeaders<JobRecord[]>(
+    `/api/v1/jobs?${params.toString()}`,
+  );
   return {
-    jobs: (await response.json()) as JobRecord[],
-    nextCursor: response.headers.get('X-Next-Cursor'),
+    jobs: data,
+    nextCursor: headers.get('X-Next-Cursor'),
   };
 }
 
@@ -347,6 +349,17 @@ export async function updateCredentials(
   await request<{ status: string }>('/api/v1/auth/credentials', {
     method: 'PUT',
     body: JSON.stringify(body),
+  });
+}
+
+export async function fixMp4(payload: {
+  source_root_key?: string | null;
+  source_path?: string | null;
+  input_filename?: string | null;
+}): Promise<{ status: string; filename: string; message: string }> {
+  return request<{ status: string; filename: string; message: string }>('/api/v1/tools/mp4-fix', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 

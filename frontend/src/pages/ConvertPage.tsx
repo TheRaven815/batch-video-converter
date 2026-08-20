@@ -1,8 +1,8 @@
 import { Fragment, useMemo, useState } from 'react';
-import { FileVideo, Folder, Play, Search, Trash2, Upload } from 'lucide-react';
+import { FileVideo, Folder, Play, Search, Trash2, Upload, Wrench } from 'lucide-react';
 import { useLocation } from 'wouter';
 
-import { probeSubtitles, uploadMedia } from '../api';
+import { fixMp4, probeSubtitles, uploadMedia } from '../api';
 import { useAppContext } from '../context/AppContext';
 import { useI18n } from '../i18n';
 import type { ExportSettings, StagedServerFile } from '../models';
@@ -472,6 +472,79 @@ export default function ConvertPage() {
             <span>{t('convert.queueJobs', { count: selectedStageCount })}</span>
           </button>
         </div>
+
+        <Mp4RepairCard />
+      </div>
+    </div>
+  );
+}
+
+function Mp4RepairCard() {
+  const app = useAppContext();
+  const [fixing, setFixing] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  // Prefer staged selection, fallback to media browser selection
+  const stagedOptions = app.staged.filter((s) => s.name.toLowerCase().endsWith('.mp4'));
+  const canUseBrowser = app.selectedPaths.size > 0;
+
+  const handleRepair = async () => {
+    let payload: { source_root_key?: string | null; source_path?: string | null; input_filename?: string | null } | null = null;
+    if (selected && stagedOptions.find((s) => s.id === selected)) {
+      const item = stagedOptions.find((s) => s.id === selected)!;
+      if (item.uploaded) {
+        payload = { input_filename: item.sourcePath };
+      } else {
+        payload = { source_root_key: item.rootKey, source_path: item.sourcePath };
+      }
+    } else if (canUseBrowser) {
+      const first = Array.from(app.selectedPaths)[0];
+      // Only handle mp4 files
+      if (first && first.toLowerCase().endsWith('.mp4')) {
+        payload = { source_root_key: app.selectedRootKey, source_path: first };
+      }
+    }
+    if (!payload) {
+      app.showToast('Onarılacak MP4 dosyası seçin (hazırlananlar veya tarayıcıdan).', 'error');
+      return;
+    }
+    setFixing(true);
+    try {
+      const res = await fixMp4(payload);
+      app.showToast(res.message || `Onarıldı: ${res.filename}`, 'success');
+    } catch (error) {
+      app.showToast(error instanceof Error ? error.message : 'Onarım başarısız.', 'error');
+    } finally {
+      setFixing(false);
+    }
+  };
+
+  return (
+    <div className="form-panel">
+      <span className="form-section-title border-b pb-2 flex items-center gap-2">
+        <Wrench size={14} /> MP4 Onar (faststart + genpts)
+      </span>
+      <p className="text-xs text-zinc-400">
+        Bozuk moov/faststart olmayan MP4 dosyalarını yerinde onarır. Kaynak tarayıcıdan veya hazırlanan dosyalardan bir MP4 seçin.
+      </p>
+      {stagedOptions.length > 0 && (
+        <div className="form-group">
+          <label className="form-label">Hazırlanan MP4 dosyası</label>
+          <select className="form-input" value={selected ?? ''} onChange={(e) => setSelected(e.target.value || null)}>
+            <option value="">— Seçin (veya tarayıcı seçimini kullan) —</option>
+            {stagedOptions.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} [{item.rootLabel}]
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="flex justify-end">
+        <button className="btn btn-outline" onClick={() => void handleRepair()} disabled={fixing}>
+          <Wrench size={14} />
+          <span>{fixing ? 'Onarılıyor…' : 'Onar'}</span>
+        </button>
       </div>
     </div>
   );

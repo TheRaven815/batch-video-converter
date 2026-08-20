@@ -80,6 +80,12 @@ class JobCreateRequest(BaseModel):
     hardware_acceleration: HardwareAcceleration = HardwareAcceleration.auto
     max_attempts: int = Field(default=3, ge=1, le=10)
     priority: int = Field(default=0, ge=-10, le=10)
+    audio_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
+    subtitle_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
+    audio_channel_mode: Optional[str] = Field(
+        default="preserve", pattern=r"^(preserve|downmix2)$"
+    )
+    skip_existing_output: bool = False
 
 
 class JobBatchCreateRequest(BaseModel):
@@ -136,6 +142,12 @@ class JobRecord(BaseModel):
     hardware_acceleration: HardwareAcceleration = HardwareAcceleration.auto
     hardware_acceleration_used: Optional[str] = Field(default=None, max_length=64)
     priority: int = Field(default=0, ge=-10, le=10)
+    audio_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
+    subtitle_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
+    audio_channel_mode: Optional[str] = Field(
+        default="preserve", pattern=r"^(preserve|downmix2)$"
+    )
+    skip_existing_output: bool = False
     queue_position: Optional[int] = Field(default=None, ge=1)
     estimated_start_seconds: Optional[int] = Field(default=None, ge=0)
     telemetry_history: list[dict[str, Any]] = Field(default_factory=list, max_length=120)
@@ -302,6 +314,22 @@ class MediaSubtitleProbeResponse(BaseModel):
     tracks: list[MediaSubtitleTrackDto]
 
 
+class MediaStreamEntryDto(BaseModel):
+    index: int
+    codec: str
+    language: Optional[str] = None
+    channels: Optional[int] = None
+    title: Optional[str] = None
+
+
+class MediaStreamsProbeResponse(BaseModel):
+    root_key: str
+    path: str
+    video: list[MediaStreamEntryDto] = Field(default_factory=list)
+    audio: list[MediaStreamEntryDto] = Field(default_factory=list)
+    subtitle: list[MediaStreamEntryDto] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     status: str
     redis: str
@@ -369,6 +397,19 @@ class SystemSettings(BaseModel):
 class UploadResponse(BaseModel):
     input_filename: str
     size_bytes: int
+
+
+class Mp4FixRequest(BaseModel):
+    source_root_key: Optional[str] = Field(default=None, max_length=64)
+    source_path: Optional[str] = Field(default=None, max_length=2048)
+    input_filename: Optional[str] = Field(default=None, max_length=1024)
+
+
+class Mp4FixResponse(BaseModel):
+    status: str = "fixed"
+    filename: str
+    source_path: Optional[str] = None
+    message: str = "MP4 fixed (faststart + genpts)"
 
 
 class AuditEventDto(BaseModel):

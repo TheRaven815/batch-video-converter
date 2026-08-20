@@ -9,6 +9,15 @@ from video_converter.api.routes import router as all_routes
 
 
 def select_routes(predicate: Callable[[str], bool]) -> APIRouter:
+    """Slice ``routes.router`` by *predicate* without duplicating host-path logic.
+
+    The predicate is evaluated on ``route.path`` exactly as registered; callers
+    must ensure their string (e.g. ``/api/v1/media``) covers future endpoints
+    such as ``/api/v1/media/streams`` to avoid host-path leakage risks
+    (PLAN.md §9). New modular endpoints added directly to the slice router
+    (e.g. ``media.router``) bypass this select and are mounted verbatim.
+    """
+
     router = APIRouter()
     for route in all_routes.routes:
         if not isinstance(route, APIRoute) or not predicate(route.path):

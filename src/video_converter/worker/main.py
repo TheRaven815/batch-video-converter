@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -240,6 +242,67 @@ def _build_output_path(input_path: Path, video_export: str, job_id: str) -> Path
     return settings.outputs_dir / filename
 
 
+def _atomic_move(src: Path, dst: Path) -> None:
+    """Atomically move *src* to *dst*, falling back to ``shutil.move`` on EXDEV.
+
+    ``os.replace`` is atomic when *src* and *dst* are on the same filesystem
+    but raises ``EXDEV`` (cross-device link) when Docker bind mounts and named
+    volumes live on different devices.  The fallback preserves the successful
+    transcode instead of leaving a partial temp file behind.
+    """
+
+    try:
+        os.replace(src, dst)
+    except OSError as exc:
+        if exc.errno == errno.EXDEV:
+            shutil.move(str(src), str(dst))
+        else:
+            raise
+
+
+def fix_mp4(source_path: Path, output_path: Path | None = None) -> Path:
+    """Repair MP4 with ``ffmpeg -fflags +genpts -c copy -movflags +faststart``.
+
+    Mirrors ``scripts/legacy/mp4_fix.py``: remux to a temporary file and
+    atomically replace the target. When *output_path* is ``None`` the source
+    is repaired in-place (same behaviour as the legacy script).
+    """
+
+    src = Path(source_path).resolve()
+    if not src.exists() or not src.is_file():
+        raise FileNotFoundError(f"source not found: {src}")
+    dst = Path(output_path).resolve() if output_path is not None else src
+    # Temp file sits next to the destination to keep the replace atomic.
+    tmp = dst.with_name(dst.stem + ".fixed.tmp.mp4")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-fflags",
+        "+genpts",
+        "-i",
+        str(src),
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(tmp),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        detail = (result.stderr or "ffmpeg failed").strip()[-700:]
+        raise RuntimeError(detail)
+    try:
+        _atomic_move(tmp, dst)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return dst
+
+
 # Subtitle codecs that can be transcoded to text-based formats (mov_text/webvtt).
 # Everything else (PGS, VOBSUB, DVB, …) is bitmap-based and cannot be embedded
 # into MP4/WebM containers.
@@ -248,14 +311,16 @@ _TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "t
 _PROBE_TIMEOUT_SECONDS = 30
 
 
-def _run_ffprobe_json(probe_cmd: list[str]) -> dict[str, Any] | None:
+def _run_ffprobe_json(
+    probe_cmd: list[str], timeout: float = _PROBE_TIMEOUT_SECONDS
+) -> dict[str, Any] | None:
     try:
         proc = subprocess.run(
             probe_cmd,
             capture_output=True,
             text=True,
             check=False,
-            timeout=_PROBE_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         if proc.returncode != 0:
             return None
@@ -312,6 +377,68 @@ def _probe_subtitle_languages(input_path: Path) -> set[str]:
     return {stream["language"] for stream in streams if stream["language"]}
 
 
+def _probe_all_streams(input_path: Path) -> dict[str, list[dict[str, Any]]] | None:
+    """Probe all streams at once (video/audio/subtitle) via a single ffprobe call.
+
+    Returns a dict with ``video``/``audio``/``subtitle`` lists where each item
+    is ``{index, codec, language, channels, title}``.  Returns ``None`` when
+    probing fails, consistent with ``_probe_subtitle_streams``.
+    """
+    payload = _run_ffprobe_json(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=index,codec_type,codec_name,channels:stream_tags=language,title",
+            "-of",
+            "json",
+            str(input_path),
+        ]
+    )
+    if payload is None:
+        return None
+
+    streams = payload.get("streams", [])
+    if not isinstance(streams, list):
+        return None
+
+    result: dict[str, list[dict[str, Any]]] = {"video": [], "audio": [], "subtitle": []}
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        codec_type = str(stream.get("codec_type") or "").strip().lower()
+        if codec_type not in result:
+            continue
+        raw_index = stream.get("index")
+        try:
+            index = int(raw_index)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        tags = stream.get("tags") if isinstance(stream.get("tags"), dict) else {}
+        language = str((tags or {}).get("language") or "").strip().lower() or None
+        title_raw = (tags or {}).get("title")
+        title = str(title_raw).strip() if title_raw is not None and str(title_raw).strip() else None
+        channels_raw = stream.get("channels")
+        channels: int | None = None
+        if isinstance(channels_raw, int):
+            channels = channels_raw
+        else:
+            try:
+                channels = int(str(channels_raw)) if channels_raw is not None else None
+            except (TypeError, ValueError):
+                channels = None
+        entry: dict[str, Any] = {
+            "index": index,
+            "codec": str(stream.get("codec_name") or "").strip().lower(),
+            "language": language,
+            "channels": channels,
+            "title": title,
+        }
+        result[codec_type].append(entry)
+    return result
+
+
 def _probe_video_codec(input_path: Path) -> str | None:
     payload = _run_ffprobe_json(
         [
@@ -362,19 +489,122 @@ def _probe_audio_codec(input_path: Path) -> str | None:
     return codec or None
 
 
+def _calculate_bitrate(channels: int | None) -> str:
+    """Legacy formula: 96k per channel (e.g. 2ch → 192k, 6ch → 576k)."""
+    try:
+        ch = int(channels) if channels is not None else 2
+    except (TypeError, ValueError):
+        ch = 2
+    ch = max(1, min(8, ch))
+    return f"{96 * ch}k"
+
+
+def _is_audio_codec_copy_compatible(video_export: str, audio_codec: str | None) -> bool:
+    """Check if *audio_codec* can be copied into *video_export* container without transcode."""
+    if video_export == "mkv":
+        # MKV supports virtually any audio codec (even unknown)
+        return True
+    if not audio_codec:
+        return False
+    codec = audio_codec.strip().lower()
+    if video_export == "mp4":
+        return codec in {"aac", "ac3", "mp3", "eac3", "alac"}
+    if video_export == "webm":
+        return codec in {"opus", "vorbis"}
+    return False
+
+
 def _audio_copy_fallback(
     audio_export: str,
     video_export: str,
     audio_codec: str | None,
 ) -> str:
-    """Return a container-safe audio mode without changing explicit encodes."""
-    if (
-        audio_export == "copy"
-        and video_export == "mp4"
-        and audio_codec not in {"aac", "mp3", "ac3", "eac3", "alac"}
-    ):
+    """Return a container-safe audio mode without changing explicit encodes.
+
+    Matrix:
+      mp4: {aac,ac3,mp3,eac3,alac} -> copy else aac
+      mkv: all copy
+      webm: {opus,vorbis} -> copy else opus
+    """
+    if audio_export != "copy":
+        return audio_export
+    if video_export == "mkv":
+        return "copy"
+    if video_export == "mp4":
+        if audio_codec not in {"aac", "mp3", "ac3", "eac3", "alac"}:
+            return "aac"
+        return "copy"
+    if video_export == "webm":
+        if audio_codec not in {"opus", "vorbis"}:
+            return "opus"
+        return "copy"
+    # Fallback for unknown containers: behave like mp4
+    if audio_codec not in {"aac", "mp3", "ac3", "eac3", "alac"}:
         return "aac"
     return audio_export
+
+
+def _build_audio_ffmpeg_args(
+    video_export: str,
+    audio_stream_indexes: list[int] | None,
+    audio_codec_map: dict[int, str | None] | None,
+    audio_channels_map: dict[int, int | None] | None,
+    audio_channel_mode: str | None,
+) -> tuple[list[str], list[str]]:
+    """Build maps and per-stream codec args for multi-audio.
+
+    Returns (maps, codec_args) where *maps* are ["-map", "0:<idx>", ...]
+    and *codec_args* are per-stream ["-c:a:<n>", ..., "-b:a:<n>", ...].
+    Empty lists mean fallback to single-audio logic.
+    """
+    if not audio_stream_indexes:
+        return [], []
+    # Deduplicate while preserving order and validate integer
+    seen: set[int] = set()
+    deduped: list[int] = []
+    for raw in audio_stream_indexes:
+        try:
+            idx = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if idx not in seen:
+            seen.add(idx)
+            deduped.append(idx)
+    if not deduped:
+        return [], []
+
+    maps: list[str] = []
+    codec_args: list[str] = []
+    for n, idx in enumerate(deduped):
+        maps.extend(["-map", f"0:{idx}"])
+        codec = (audio_codec_map or {}).get(idx) if audio_codec_map else None
+        codec_norm = str(codec or "").strip().lower() or None
+        channels_raw = (audio_channels_map or {}).get(idx) if audio_channels_map else None
+        try:
+            channels = int(channels_raw) if channels_raw is not None else 2
+        except (TypeError, ValueError):
+            channels = 2
+        if audio_channel_mode == "downmix2":
+            channels = 2
+        # Clamp
+        channels = max(1, min(8, channels))
+        bitrate = _calculate_bitrate(channels)
+
+        # Determine copy compatibility for this container/codec
+        if _is_audio_codec_copy_compatible(video_export, codec_norm):
+            codec_args.extend([f"-c:a:{n}", "copy"])
+        else:
+            if video_export == "webm":
+                # webm fallback is opus (libopus)
+                codec_args.extend([f"-c:a:{n}", "libopus", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)])
+            elif video_export == "mkv":
+                # MKV should copy all, but if we are here it means unknown codec?
+                # For safety fallback to aac
+                codec_args.extend([f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)])
+            else:
+                # mp4 and others -> aac
+                codec_args.extend([f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)])
+    return maps, codec_args
 
 
 def _subtitle_codec_for_container(output_path: Path) -> str:
@@ -384,6 +614,12 @@ def _subtitle_codec_for_container(output_path: Path) -> str:
     if suffix == ".webm":
         return "webvtt"
     return "copy"
+
+
+def _srt_suffix_for_lang(lang: str, count: int) -> str:
+    """Legacy suffix: first occurrence '.<lang>.srt', next '.<lang><count>.srt'."""
+    normalized = str(lang or "und").strip().lower() or "und"
+    return f".{normalized}.srt" if count == 0 else f".{normalized}{count}.srt"
 
 
 def _ffmpeg_command(
@@ -403,6 +639,10 @@ def _ffmpeg_command(
     resolution: str = "original",
     encoder_preset: str | None = None,
     hardware_encoder: str | None = None,
+    audio_stream_indexes: list[int] | None = None,
+    audio_codec_map: dict[int, str | None] | None = None,
+    audio_channels_map: dict[int, int | None] | None = None,
+    audio_channel_mode: str | None = None,
 ) -> list[str]:
     cmd = ["ffmpeg", "-y", "-i", str(input_path)]
 
@@ -410,6 +650,8 @@ def _ffmpeg_command(
         cmd.extend(["-c:v", "copy"])
     elif hardware_encoder == "h264_v4l2m2m":
         cmd.extend(["-c:v", "h264_v4l2m2m", "-b:v", target_video_bitrate or "4M"])
+    elif hardware_encoder == "hevc_v4l2m2m":
+        cmd.extend(["-c:v", "hevc_v4l2m2m", "-b:v", target_video_bitrate or "4M"])
     elif profile == "h265_mp4":
         cmd.extend(["-c:v", "libx265", "-preset", encoder_preset or "medium"])
     elif profile == "vp9_webm":
@@ -436,27 +678,46 @@ def _ffmpeg_command(
     # every CPU visible to the container.
     cmd.extend(["-threads", str(max(1, min(32, ffmpeg_threads)))])
 
-    if audio_export == "copy":
-        cmd.extend(["-c:a", "copy"])
-    elif audio_export == "aac":
-        cmd.extend(["-c:a", "aac", "-b:a", f"{audio_bitrate_kbps or 128}k"])
-    elif audio_export == "mp3":
-        cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k"])
-    elif audio_export == "opus":
-        cmd.extend(["-c:a", "libopus", "-b:a", f"{audio_bitrate_kbps or 96}k"])
+    # -- multi-audio handling (backward compatible) ---------------------------------
+    audio_maps, audio_codec_args = _build_audio_ffmpeg_args(
+        video_export, audio_stream_indexes, audio_codec_map, audio_channels_map, audio_channel_mode
+    )
+    has_multi_audio = bool(audio_maps)
+
+    if has_multi_audio:
+        # Explicit stream selection prevents ffmpeg from auto-mapping all audios/attachments.
+        cmd.extend(["-map", "0:v:0"])
+        cmd.extend(audio_maps)
+        cmd.extend(audio_codec_args)
     else:
-        cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+        if audio_export == "copy":
+            cmd.extend(["-c:a", "copy"])
+        elif audio_export == "aac":
+            cmd.extend(["-c:a", "aac", "-b:a", f"{audio_bitrate_kbps or 128}k"])
+        elif audio_export == "mp3":
+            cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k"])
+        elif audio_export == "opus":
+            cmd.extend(["-c:a", "libopus", "-b:a", f"{audio_bitrate_kbps or 96}k"])
+        else:
+            cmd.extend(["-c:a", "aac", "-b:a", "128k"])
 
     if subtitle_export == "embedded":
         # Select exactly one video and one audio stream plus the requested
         # subtitle stream(s); a bare "-map 0" would also pull attachments and
         # data streams, which MP4/WebM muxers reject.
-        if subtitle_language:
-            cmd.extend(
-                ["-map", "0:v:0", "-map", "0:a:0?", "-map", f"0:s:m:language:{subtitle_language}?"]
-            )
+        if has_multi_audio:
+            # Audio maps already added; only add subtitle selection.
+            if subtitle_language:
+                cmd.extend(["-map", f"0:s:m:language:{subtitle_language}?"])
+            else:
+                cmd.extend(["-map", "0:s:0?"])
         else:
-            cmd.extend(["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s:0?"])
+            if subtitle_language:
+                cmd.extend(
+                    ["-map", "0:v:0", "-map", "0:a:0?", "-map", f"0:s:m:language:{subtitle_language}?"]
+                )
+            else:
+                cmd.extend(["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s:0?"])
         cmd.extend(["-c:s", _subtitle_codec_for_container(output_path)])
     else:
         # "none" and "separate_srt" must not embed subtitles in the video output.
@@ -469,7 +730,9 @@ def _ffmpeg_command(
     return cmd
 
 
-def _probe_duration_seconds(input_path: Path) -> float | None:
+def _probe_duration_seconds(
+    input_path: Path, timeout: float = _PROBE_TIMEOUT_SECONDS
+) -> float | None:
     probe_cmd = [
         "ffprobe",
         "-v",
@@ -481,10 +744,12 @@ def _probe_duration_seconds(input_path: Path) -> float | None:
         str(input_path),
     ]
     try:
-        proc = subprocess.run(probe_cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            probe_cmd, capture_output=True, text=True, check=False, timeout=timeout
+        )
         if proc.returncode != 0:
             return None
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
 
     try:
@@ -805,6 +1070,20 @@ def process_job(job_id: str) -> None:
                 _resolve_export_options(data)
             )
             output_path = _build_output_path(input_path, video_export, job_id)
+            # Skip existing output: legacy skip_existing behavior (PLAN 6.3 O-2)
+            skip_existing = bool(data.get("skip_existing_output"))
+            if skip_existing and output_path.exists():
+                job_logger.info("çıktı zaten mevcut, atlandı: %s", output_path.name)
+                job_repository.update_status(
+                    job_id,
+                    JobStatus.completed,
+                    progress_percent=100,
+                    progress_phase="completed",
+                    progress_message="Çıktı zaten mevcut, atlandı",
+                    output_filename=output_path.name,
+                    log_line="Çıktı zaten mevcut, atlandı",
+                )
+                return
             disk = shutil.disk_usage(settings.data_root)
             minimum_free = max(_minimum_free_disk_bytes(), input_path.stat().st_size)
             if disk.free < minimum_free:
@@ -817,7 +1096,8 @@ def process_job(job_id: str) -> None:
             # success, so partial files are never listed or downloadable.
             temp_output_path = settings.temp_dir / output_path.name
             temp_output_path.parent.mkdir(parents=True, exist_ok=True)
-            temp_subtitle_path = settings.temp_dir / f"{output_path.stem}.srt"
+            # Use job-specific temp name to avoid collisions in same-batch concurrent jobs
+            temp_subtitle_path = settings.temp_dir / f"{job_id}.srt"
 
             if subtitle_export in {"embedded", "separate_srt"}:
                 subtitle_streams = _probe_subtitle_streams(input_path)
@@ -842,24 +1122,63 @@ def process_job(job_id: str) -> None:
                 and _probe_video_codec(input_path) == "h264"
             )
             hardware_request = str(data.get("hardware_acceleration") or "auto")
-            hardware_encoder = (
-                "h264_v4l2m2m"
-                if hardware_request != "disabled"
-                and profile == "h264_mp4"
-                and "h264_v4l2m2m" in _hardware_encoders
-                else None
-            )
+            hardware_encoder: str | None = None
+            if hardware_request != "disabled":
+                if profile == "h264_mp4" and "h264_v4l2m2m" in _hardware_encoders:
+                    hardware_encoder = "h264_v4l2m2m"
+                elif profile == "h265_mp4" and "hevc_v4l2m2m" in _hardware_encoders:
+                    hardware_encoder = "hevc_v4l2m2m"
             current_record = job_repository.get(job_id)
             if current_record is not None:
                 current_record.hardware_acceleration_used = hardware_encoder
                 job_repository.persist(current_record)
-            if audio_export == "copy" and video_export == "mp4":
+            # -- multi-audio preparation -------------------------------------------------
+            raw_audio_indexes = data.get("audio_stream_indexes")
+            audio_stream_indexes: list[int] | None = None
+            if isinstance(raw_audio_indexes, list) and raw_audio_indexes:
+                try:
+                    audio_stream_indexes = [int(x) for x in raw_audio_indexes]
+                except (TypeError, ValueError):
+                    audio_stream_indexes = None
+            raw_subtitle_indexes = data.get("subtitle_stream_indexes")
+            subtitle_stream_indexes: list[int] | None = None
+            if isinstance(raw_subtitle_indexes, list) and raw_subtitle_indexes:
+                try:
+                    subtitle_stream_indexes = [int(x) for x in raw_subtitle_indexes]
+                except (TypeError, ValueError):
+                    subtitle_stream_indexes = None
+            audio_channel_mode = str(data.get("audio_channel_mode") or "preserve")
+            # Probe all streams once for multi-audio channel/codec info (fallback to per-probe if needed)
+            audio_codec_map: dict[int, str | None] | None = None
+            audio_channels_map: dict[int, int | None] | None = None
+            if audio_stream_indexes:
+                all_streams = _probe_all_streams(input_path)
+                if all_streams is not None:
+                    audio_codec_map = {}
+                    audio_channels_map = {}
+                    audio_dict = {s["index"]: s for s in all_streams.get("audio", [])}
+                    for idx in audio_stream_indexes:
+                        info = audio_dict.get(idx)
+                        if info is not None:
+                            audio_codec_map[idx] = info.get("codec")
+                            audio_channels_map[idx] = info.get("channels")
+                        else:
+                            audio_codec_map[idx] = None
+                            audio_channels_map[idx] = None
+                else:
+                    # Probe failed: keep maps empty, per-stream transcode will fallback to aac/opus
+                    audio_codec_map = {idx: None for idx in audio_stream_indexes}
+                    audio_channels_map = {idx: None for idx in audio_stream_indexes}
+            # Single-audio fallback matrix (mp4/mkv/webm)
+            if not audio_stream_indexes and audio_export == "copy":
                 audio_codec = _probe_audio_codec(input_path)
                 safe_audio_export = _audio_copy_fallback(audio_export, video_export, audio_codec)
                 if safe_audio_export != audio_export:
                     job_logger.warning(
-                        "audio codec %s is not MP4-safe; falling back to AAC",
+                        "audio codec %s is not %s-safe; falling back to %s",
                         audio_codec or "unknown",
+                        video_export,
+                        safe_audio_export.upper(),
                     )
                     audio_export = safe_audio_export
             try:
@@ -879,6 +1198,10 @@ def process_job(job_id: str) -> None:
                     resolution=str(data.get("resolution") or "original"),
                     encoder_preset=str(data.get("encoder_preset") or "veryfast"),
                     hardware_encoder=hardware_encoder,
+                    audio_stream_indexes=audio_stream_indexes,
+                    audio_codec_map=audio_codec_map,
+                    audio_channels_map=audio_channels_map,
+                    audio_channel_mode=audio_channel_mode,
                 )
                 return_code, stderr_text = _run_ffmpeg_with_progress(
                     job_id, cmd, duration_seconds=duration_seconds
@@ -914,6 +1237,10 @@ def process_job(job_id: str) -> None:
                         resolution=str(data.get("resolution") or "original"),
                         encoder_preset=str(data.get("encoder_preset") or "veryfast"),
                         hardware_encoder=hardware_encoder,
+                        audio_stream_indexes=audio_stream_indexes,
+                        audio_codec_map=audio_codec_map,
+                        audio_channels_map=audio_channels_map,
+                        audio_channel_mode=audio_channel_mode,
                     )
                     return_code, stderr_text = _run_ffmpeg_with_progress(
                         job_id, fallback_cmd, duration_seconds=duration_seconds
@@ -943,38 +1270,109 @@ def process_job(job_id: str) -> None:
                     raise RuntimeError(stderr_tail)
 
                 if subtitle_export == "separate_srt":
-                    subtitle_output = output_path.parent / f"{output_path.stem}.srt"
-                    subtitle_cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        str(input_path),
-                        "-map",
-                        f"0:s:m:language:{subtitle_language}?" if subtitle_language else "0:s:0?",
-                        "-threads",
-                        str(settings.ffmpeg_threads),
-                        str(temp_subtitle_path),
-                    ]
-                    try:
-                        subtitle_proc = subprocess.run(
-                            subtitle_cmd, capture_output=True, text=True, check=False, timeout=1800
-                        )
-                        if subtitle_proc.returncode == 0 and temp_subtitle_path.exists():
-                            os.replace(temp_subtitle_path, subtitle_output)
+                    # Multi-SRT extraction when subtitle_stream_indexes is provided
+                    # (legacy defaultdict(int) suffix logic: .{lang}.srt then .{lang}N.srt)
+                    if subtitle_stream_indexes:
+                        # Probe subtitle language info (use _probe_all_streams for full context)
+                        all_sub = _probe_all_streams(input_path)
+                        if all_sub is not None:
+                            sub_list = all_sub.get("subtitle", [])
                         else:
-                            subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
-                            job_logger.warning(
-                                "separate_srt export skipped: %s",
-                                subtitle_stderr or "subtitle stream not found",
-                            )
-                    except FileNotFoundError:
-                        job_logger.warning(
-                            "separate_srt export skipped: ffmpeg executable not found"
-                        )
-                    except subprocess.TimeoutExpired:
-                        job_logger.warning("separate_srt export skipped: extraction timed out")
+                            # Fallback: _probe_subtitle_streams does not return indexes, so treat as unknown -> "und"
+                            sub_list = []
+                        # Build index -> language map
+                        lang_by_index: dict[int, str | None] = {}
+                        for entry in sub_list:
+                            try:
+                                idx = int(entry.get("index"))  # type: ignore[arg-type]
+                            except (TypeError, ValueError):
+                                continue
+                            lang_by_index[idx] = entry.get("language")  # may be None
 
-                os.replace(temp_output_path, output_path)
+                        lang_counts: dict[str, int] = defaultdict(int)
+                        for idx in subtitle_stream_indexes:
+                            try:
+                                idx_int = int(idx)
+                            except (TypeError, ValueError):
+                                continue
+                            lang_raw = lang_by_index.get(idx_int)
+                            lang = str(lang_raw).strip().lower() if lang_raw else "und"
+                            if not lang:
+                                lang = "und"
+                            count = lang_counts[lang]
+                            suffix = _srt_suffix_for_lang(lang, count)
+                            lang_counts[lang] += 1
+                            # Unique temp per index to prevent collisions
+                            temp_srt = settings.temp_dir / f"{job_id}-{idx_int}.srt"
+                            temp_srt.parent.mkdir(parents=True, exist_ok=True)
+                            subtitle_output_multi = output_path.parent / f"{output_path.stem}{suffix}"
+                            subtitle_cmd_multi = [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(input_path),
+                                "-map",
+                                f"0:{idx_int}",
+                                "-threads",
+                                str(settings.ffmpeg_threads),
+                                str(temp_srt),
+                            ]
+                            try:
+                                subtitle_proc = subprocess.run(
+                                    subtitle_cmd_multi, capture_output=True, text=True, check=False, timeout=1800
+                                )
+                                if subtitle_proc.returncode == 0 and temp_srt.exists():
+                                    _atomic_move(temp_srt, subtitle_output_multi)
+                                else:
+                                    subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
+                                    job_logger.warning(
+                                        "separate_srt export skipped for index %s: %s",
+                                        idx_int,
+                                        subtitle_stderr or "subtitle stream not found",
+                                    )
+                                    temp_srt.unlink(missing_ok=True)
+                            except FileNotFoundError:
+                                job_logger.warning(
+                                    "separate_srt export skipped for index %s: ffmpeg executable not found",
+                                    idx_int,
+                                )
+                            except subprocess.TimeoutExpired:
+                                job_logger.warning("separate_srt export skipped for index %s: extraction timed out", idx_int)
+                                temp_srt.unlink(missing_ok=True)
+                    else:
+                        # Backward-compatible single SRT extraction (subtitle_language based)
+                        subtitle_output = output_path.parent / f"{output_path.stem}.srt"
+                        subtitle_cmd = [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            str(input_path),
+                            "-map",
+                            f"0:s:m:language:{subtitle_language}?" if subtitle_language else "0:s:0?",
+                            "-threads",
+                            str(settings.ffmpeg_threads),
+                            str(temp_subtitle_path),
+                        ]
+                        try:
+                            subtitle_proc = subprocess.run(
+                                subtitle_cmd, capture_output=True, text=True, check=False, timeout=1800
+                            )
+                            if subtitle_proc.returncode == 0 and temp_subtitle_path.exists():
+                                _atomic_move(temp_subtitle_path, subtitle_output)
+                            else:
+                                subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
+                                job_logger.warning(
+                                    "separate_srt export skipped: %s",
+                                    subtitle_stderr or "subtitle stream not found",
+                                )
+                        except FileNotFoundError:
+                            job_logger.warning(
+                                "separate_srt export skipped: ffmpeg executable not found"
+                            )
+                        except subprocess.TimeoutExpired:
+                            job_logger.warning("separate_srt export skipped: extraction timed out")
+
+                _atomic_move(temp_output_path, output_path)
 
                 job_repository.update_status(
                     job_id,
@@ -990,6 +1388,15 @@ def process_job(job_id: str) -> None:
                 # cancel, or shutdown this removes the partial output.
                 temp_output_path.unlink(missing_ok=True)
                 temp_subtitle_path.unlink(missing_ok=True)
+                # Cleanup any remaining multi-SRT per-index temps
+                try:
+                    for _p in settings.temp_dir.glob(f"{job_id}-*.srt"):
+                        try:
+                            _p.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                except OSError:
+                    pass
         except Exception as exc:  # noqa: BLE001
             current = job_repository.get(job_id)
             retry_settings = _runtime_settings().get("retry", {})

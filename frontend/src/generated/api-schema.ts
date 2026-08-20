@@ -525,6 +525,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/media/streams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Probe Media Streams */
+        get: operations["probe_media_streams_api_v1_media_streams_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -872,6 +889,14 @@ export interface components {
              * @default 0
              */
             priority: number;
+            /** Audio Stream Indexes */
+            audio_stream_indexes?: number[] | null;
+            /** Subtitle Stream Indexes */
+            subtitle_stream_indexes?: number[] | null;
+            /** Audio Channel Mode */
+            audio_channel_mode?: string | null;
+            /** Skip Existing Output */
+            skip_existing_output?: boolean;
         };
         /** JobIdsRequest */
         JobIdsRequest: {
@@ -989,6 +1014,14 @@ export interface components {
              * @default 0
              */
             priority: number;
+            /** Audio Stream Indexes */
+            audio_stream_indexes?: number[] | null;
+            /** Subtitle Stream Indexes */
+            subtitle_stream_indexes?: number[] | null;
+            /** Audio Channel Mode */
+            audio_channel_mode?: string | null;
+            /** Skip Existing Output */
+            skip_existing_output?: boolean;
             /** Queue Position */
             queue_position?: number | null;
             /** Estimated Start Seconds */
@@ -1080,6 +1113,32 @@ export interface components {
             title?: string | null;
             /** Codec Name */
             codec_name?: string | null;
+        };
+        /** MediaStreamEntryDto */
+        MediaStreamEntryDto: {
+            /** Index */
+            index: number;
+            /** Codec */
+            codec: string;
+            /** Language */
+            language?: string | null;
+            /** Channels */
+            channels?: number | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** MediaStreamsProbeResponse */
+        MediaStreamsProbeResponse: {
+            /** Root Key */
+            root_key: string;
+            /** Path */
+            path: string;
+            /** Video */
+            video: components["schemas"]["MediaStreamEntryDto"][];
+            /** Audio */
+            audio: components["schemas"]["MediaStreamEntryDto"][];
+            /** Subtitle */
+            subtitle: components["schemas"]["MediaStreamEntryDto"][];
         };
         /** OutputFileDto */
         OutputFileDto: {
@@ -3590,6 +3649,83 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MediaSubtitleProbeResponse"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredErrorResponse"];
+                };
+            };
+        };
+    };
+    probe_media_streams_api_v1_media_streams_get: {
+        parameters: {
+            query: {
+                root_key: string;
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaStreamsProbeResponse"];
                 };
             };
             /** @description Bad request */
