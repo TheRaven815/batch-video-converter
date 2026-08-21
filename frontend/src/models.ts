@@ -128,7 +128,7 @@ export type UiPreferences = Omit<Schemas['UiPreferences'], 'theme' | 'density'> 
   density: UiDensity;
 };
 export type SystemSettings = Omit<
-  Schemas['SystemSettings-Output'],
+  Schemas['SystemSettings'],
   'default_export' | 'auto_cleanup' | 'ui'
 > & {
   default_export: DefaultExportSettings;
