@@ -217,8 +217,8 @@ OCI healthcheck, and defaults to:
 ```env
 PYTHONPATH=/app/src
 VIDEO_CONVERTER_STORAGE=redis
-DATA_ROOT=/data
-MEDIA_MOUNTS=Media=/data/input
+DATA_ROOT=/app-data
+MEDIA_MOUNTS=Movies=/media/movies;Series=/media/series;Downloads=/media/downloads
 ```
 
 ### Unified Compose
@@ -228,15 +228,11 @@ Coolify/Portainer, VPS deployments, and Raspberry Pi:
 
 - `app` supervises Uvicorn and the Python worker through `entrypoint.sh`.
 - `redis` runs `redis:7.2-alpine` with append-only persistence.
-- `APP_DATA_SOURCE` can be a bind path such as `./data` or the `app-data`
-  named volume. It is mounted at `/app-data` inside the container to avoid
-  conflicts with platform-managed `/data` storage. On startup, the container
-  prepares the runtime subdirectories and then runs the application as the
-  unprivileged `app` user.
-- Redis persistence uses the separate `redis-data` named volume.
-- All media mounts are read-only and their host paths are configured with
-  `MEDIA_MOVIES_SOURCE`, `MEDIA_SERIES_SOURCE`, and
-  `MEDIA_DOWNLOADS_SOURCE`.
+- `APP_DATA_SOURCE` can be a bind path such as `./data` (local) or the `app-data`
+  named volume (Coolify). It is mounted at `/app-data:rw,z` (`compose:27`, quoted for spaces) to avoid
+  conflicts with platform-managed `/data` storage. On startup, `entrypoint.sh:7` prepares `input/outputs/temp/logs/data` and drops to `app` uid 1000.
+- Redis persistence uses the separate `redis-data` named volume (`compose:68` `redis-data:/data`) — **required**, do not remove; it holds the queue even if `APP_DATA_SOURCE` is a bind mount.
+- All media mounts are read-only (`:ro`, `compose:28-30` quoted) and their host paths are configured with `MEDIA_MOVIES_SOURCE` etc. — container paths must match `MEDIA_MOUNTS`.
 - The app healthcheck uses `/health/ready`, and Compose allows up to ten minutes
   for active FFmpeg work to drain during shutdown.
 - Startup healthchecks use short, broadly compatible intervals so Redis and the
@@ -270,49 +266,79 @@ in the Coolify UI; a second env or Compose file is not required.
 Recommended Coolify settings:
 
 - Source: Git repository.
-- Build/deploy type: Docker Compose.
+- Build/deploy type: **Docker Compose** (not `Dockerfile` — your earlier `Persistent storage` bug with `/data/coolify/.../media/*` was an `Application` deploy).
 - Compose file: `docker-compose.yml`.
 - Public service: `app`.
 - Container port: `8765`.
 - Healthcheck path: `/health/ready`.
+
+> When `Docker Compose` is selected, Coolify shows `Docker Compose volume mounts are read-only here` in Persistent Storage. **Do not add manual bind mounts** — media mounts come from `docker-compose.yml:28-30` (`MEDIA_*_SOURCE -> /media/*:ro`). The only auto-created volume you should see is `redis-data -> /data` (`compose:68`), which is the Redis persistence volume and is required.
+
+Fix from the `raspi` investigation (`docker inspect f153460c: Source /data/coolify/.../media/movies -> /media/movies` empty):
+
+1. Rename `TV Series` to `TV_Series` on the host (`mv "/media/RAVEN/TV Series" /media/RAVEN/TV_Series`) — or quote the compose line (`compose:29` is now quoted for spaces).
+2. In Coolify `Environment Variables`, set only the 4 required values from `.env.example` (see above).
+3. Delete the stale `Persistent Storage` directories (`/data/coolify/.../media/*`, duplicate `/data`) — they are ignored in Compose mode.
+4. `Redeploy`.
 
 In Coolify's advanced build settings, leave `Include Source Commit in Build`
 disabled and avoid forced/no-cache rebuilds unless troubleshooting. Including a
 different commit hash in every build invalidates otherwise reusable Docker
 layers.
 
-Recommended Coolify variables include `APP_DATA_SOURCE=app-data`,
-`APP_PORT=8765`, and host paths for the three `MEDIA_*_SOURCE` variables.
-`MEDIA_MOUNTS` continues to use the fixed container paths. Redis host access is
-bound to loopback only; application traffic uses the private Compose network.
+Minimal Coolify env (paste into UI):
+
+```env
+MEDIA_MOUNTS=Movies=/media/movies;Series=/media/series;Downloads=/media/downloads
+MEDIA_MOVIES_SOURCE=/media/RAVEN/Movies
+MEDIA_SERIES_SOURCE=/media/RAVEN/TV_Series
+MEDIA_DOWNLOADS_SOURCE=/media/RAVEN/Downloads
+APP_DATA_SOURCE=app-data
+```
+
+All other `APP_*` / `JWT_*` / `REDIS_*` values work from defaults (`config.py:46-57`, `auth.py:121`, `config.py:163`). Set them only if you want to pre-provision credentials — otherwise use the first-run setup screen in the UI.
 
 ## Environment Variables
 
-| Variable | Default / example | Description |
+### Minimal required (Coolify / Docker Compose)
+
+Copy `.env.example` — it already contains the only 4 values you must set:
+
+```env
+MEDIA_MOUNTS=Movies=/media/movies;Series=/media/series;Downloads=/media/downloads
+MEDIA_MOVIES_SOURCE=/media/RAVEN/Movies
+MEDIA_SERIES_SOURCE=/media/RAVEN/TV_Series
+MEDIA_DOWNLOADS_SOURCE=/media/RAVEN/Downloads
+APP_DATA_SOURCE=app-data   # local dev: ./data  ·  Coolify: app-data (named volume)
+```
+
+* `MEDIA_MOUNTS` — container paths shown in the UI (`src/video_converter/core/config.py:107`). Must match the `:/media/...:ro` targets in `docker-compose.yml:28-30`.
+* `MEDIA_*_SOURCE` — **host** paths (the Raspi/VPS), not the laptop. They are only used by `docker-compose.yml` volume interpolation; the Python app never reads them directly (`extra="ignore"` in `config.py:43`).
+* `APP_DATA_SOURCE` — writable `DATA_ROOT=/app-data` mount. Use the named volume `app-data` on Coolify, or `./data` locally.
+
+> **Spaces:** host folders with spaces (`TV Series`) break the YAML volume line if unquoted (`docker-compose.yml:28` now quoted). Rename to `TV_Series` or keep the env quoted: `MEDIA_SERIES_SOURCE="/media/TV Series"`.
+
+All other variables have safe defaults and can be omitted:
+
+| Variable | Default (code) | When to set |
 | --- | --- | --- |
-| `APP_IMAGE` | `batch-video-converter:local` | Image name/tag. Set a pinned GHCR tag when deploying a prebuilt release. |
-| `APP_PORT` | `8765` | Host port mapped to container port 8765. |
-| `APP_DATA_SOURCE` | `./data` | Host data path or the `app-data` named volume; mounted at `/app-data`. |
-| `MEDIA_MOVIES_SOURCE` | `./media/movies` | Host path mounted read-only at `/media/movies`. |
-| `MEDIA_SERIES_SOURCE` | `./media/series` | Host path mounted read-only at `/media/series`. |
-| `MEDIA_DOWNLOADS_SOURCE` | `./media/downloads` | Host path mounted read-only at `/media/downloads`. |
-| `V4L2_DEVICE` | `/dev/null` | Set to `/dev/video11` only on Raspberry Pi 4. |
-| `VIDEO_CONVERTER_STORAGE` | `redis` | Storage backend. Use `redis` for Docker/production and `local` for single-machine development. |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL when `VIDEO_CONVERTER_STORAGE=redis`. Local Redis usually uses `redis://localhost:6380/0`. |
-| `DATA_ROOT` | `/data` | Writable application root. The app creates `input`, `outputs`, `temp`, `logs`, and `data` under it. |
-| `MEDIA_MOUNTS` | `Label=/container/path;Label2=/container/path2` | Read-only media roots shown in the UI. If empty, the app falls back to `DATA_ROOT/input`. |
-| `WORKER_CONCURRENCY` | `1` | Number of jobs processed concurrently by the worker. Increase only when CPU/RAM/IO capacity is sufficient. |
-| `FFMPEG_THREADS` | `1` | Maximum encoder threads per FFmpeg process (1–32). Approximate CPU pressure is `WORKER_CONCURRENCY × FFMPEG_THREADS`. |
-| `APP_USERNAME` | `admin` | Username for accessing the web UI and API (only used together with `APP_PASSWORD`). |
-| `APP_PASSWORD` | *(unset)* | Optional pre-provisioned password. There is no default: if unset, the UI shows a one-time first-run setup screen to create the admin account. |
-| `JWT_SECRET` | *(auto-generated)* | Secret key used to sign JWT authentication tokens. If not set, a secret is generated once and persisted under `DATA_ROOT/data/jwt_secret`. |
+| `VIDEO_CONVERTER_STORAGE` | `redis` (`config.py:47`) | Only for local dev without Redis: `local` |
+| `REDIS_URL` | `redis://redis:6379/0` (`config.py:46`, `compose:9`) | Only if Redis is not on the compose network |
+| `DATA_ROOT` | `/app-data` (`config.py:48`, `Dockerfile:18`) | Never — fixed to avoid Coolify's reserved `/data` |
+| `WORKER_CONCURRENCY` | `1` | Increase only on strong hardware |
+| `FFMPEG_THREADS` | `1` | 1–32, `WORKER × THREADS` = CPU pressure |
+| `FFMPEG_STALL_TIMEOUT_SECONDS` | `300` | Only for very long encodes |
+| `MIN_FREE_DISK_BYTES` / `MAX_UPLOAD_BYTES` | `512 MB` / `10 GB` | Rarely |
+| `APP_USERNAME` / `APP_PASSWORD` | `admin` / *(none)* (`config.py:55`, `auth.py:121`) | **Optional.** If `APP_PASSWORD` is empty (default), the UI shows a first-run setup screen. `APP_USERNAME` is ignored unless `APP_PASSWORD` is set. |
+| `JWT_SECRET` | *(auto-generated at `DATA_ROOT/data/jwt_secret` — `config.py:163`)* | Only to pin a secret across rebuilds |
+| `APP_IMAGE` / `APP_PORT` / `V4L2_DEVICE` / `REDIS_HOST_PORT` | See compose | Only for custom ports or Pi 4 hardware encoder |
 
 Important rules:
 
-- `MEDIA_MOUNTS` paths are container paths, not host paths.
-- Each `MEDIA_MOUNTS` path must match a read-only mount on the combined `app` service.
-- Source media mounts should be read-only (`:ro`).
-- Runtime output, logs, temp files, and local SQLite data belong under `DATA_ROOT`.
+- `MEDIA_MOUNTS` paths are **container** paths; `MEDIA_*_SOURCE` are **host** paths — they must pair in `docker-compose.yml:28-30`.
+- Do **not** add manual `Persistent Storage` directories in Coolify when using **Docker Compose** deploy type. The banner `Docker Compose volume mounts are read-only here` (your screenshot) is expected — volumes come from the compose file. Only the `redis-data` named volume (`volumes: redis-data:/data` in `compose:68`) is needed and is created automatically.
+- Source media mounts must stay `:ro`; the app never writes there.
+- Everything writable lives under `DATA_ROOT=/app-data` (`input`, `outputs`, `temp`, `logs`, `data`).
 
 ## API Summary
 
@@ -517,7 +543,7 @@ docker compose up --build
 
 ## Troubleshooting
 
-- UI opens but media roots are empty: verify `MEDIA_MOUNTS` and the matching `MEDIA_*_SOURCE` host paths.
+- UI opens but media roots are empty: verify `MEDIA_MOUNTS` and the matching `MEDIA_*_SOURCE` host paths. On `raspi`, run `docker inspect <app_id> --format '{{ json .Mounts }}' | python3 -m json.tool` — `Source` must be `/media/RAVEN/...`, not `/data/coolify/.../media/*` (stale `Application` deploy). `docker exec <id> ls -l /media/movies` must list host files; `total 0` means a Coolify `Persistent Storage` bind was created with a relative path. In **Docker Compose** mode (see Coolify section) leave Persistent Storage empty — `redis-data` volume is the only one needed.
 - `GET /health/ready` returns 503: Redis is unavailable or `REDIS_URL` is wrong when using `VIDEO_CONVERTER_STORAGE=redis`.
 - Local run complains about Redis: use default local storage or run `python run_local.py --storage local`; only `--storage redis` requires a local Redis-compatible service.
 - Jobs stay queued: check that the worker service/process is running and can reach the same Redis/local store and media mounts as the API.

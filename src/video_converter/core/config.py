@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://redis:6379/0"
     video_converter_storage: Literal["redis", "local"] = "redis"
-    data_root: Path = Path("/data")
+    data_root: Path = Path("/app-data")
     media_mounts: str = ""
     worker_concurrency: int = Field(default=1, ge=1, le=8)
     ffmpeg_threads: int = Field(default=1, ge=1, le=32)

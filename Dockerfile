@@ -16,7 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src \
     VIDEO_CONVERTER_STORAGE=redis \
     DATA_ROOT=/app-data \
-    MEDIA_MOUNTS=Media=/app-data/input
+    MEDIA_MOUNTS=Movies=/media/movies;Series=/media/series;Downloads=/media/downloads
 
 WORKDIR /app
 
