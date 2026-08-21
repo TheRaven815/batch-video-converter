@@ -21,12 +21,21 @@ services:
     volumes:
       # APP_DATA_SOURCE accepts either a host path (./data) or the declared
       # app-data named volume, which is useful for Coolify/Portainer.
-      # Values are quoted so host paths containing spaces (e.g. "/media/TV Series")
-      # are not split by the YAML parser — prefer renaming folders to avoid spaces.
       - "${APP_DATA_SOURCE:-./data}:/app-data:rw,z"
-      - "${MEDIA_MOVIES_SOURCE:-./media/movies}:/media/movies:ro"
-      - "${MEDIA_SERIES_SOURCE:-./media/series}:/media/series:ro"
-      - "${MEDIA_DOWNLOADS_SOURCE:-./media/downloads}:/media/downloads:ro"
+      # Use long syntax for media bind mounts so Coolify correctly interpolates
+      # host paths with spaces and does not fall back to /data/coolify/... .
+      - type: bind
+        source: ${MEDIA_MOVIES_SOURCE:-./media/movies}
+        target: /media/movies
+        read_only: true
+      - type: bind
+        source: ${MEDIA_SERIES_SOURCE:-./media/series}
+        target: /media/series
+        read_only: true
+      - type: bind
+        source: ${MEDIA_DOWNLOADS_SOURCE:-./media/downloads}
+        target: /media/downloads
+        read_only: true
     devices:
       # Set V4L2_DEVICE=/dev/video11 on Raspberry Pi 4. The /dev/null default
       # keeps the same Compose file portable; Pi 5 uses software encoding.
