@@ -407,14 +407,11 @@ export function App() {
         hardware_acceleration: settings.hardware_acceleration,
         max_attempts: settings.max_attempts,
         priority: settings.priority,
-        audio_stream_indexes:
-          settings.audio_stream_indexes ?? settings.audioStreamIndexes ?? null,
+        audio_stream_indexes: settings.audio_stream_indexes ?? settings.audioStreamIndexes ?? null,
         subtitle_stream_indexes:
           settings.subtitle_stream_indexes ?? settings.subtitleStreamIndexes ?? null,
-        audio_channel_mode:
-          settings.audio_channel_mode ?? settings.audioChannelMode ?? 'preserve',
-        skip_existing_output:
-          settings.skip_existing_output ?? settings.skipExistingOutput ?? false,
+        audio_channel_mode: settings.audio_channel_mode ?? settings.audioChannelMode ?? 'preserve',
+        skip_existing_output: settings.skip_existing_output ?? settings.skipExistingOutput ?? false,
       }));
       const validation = await validateJobs(payload);
       if (validation.invalid_count) {

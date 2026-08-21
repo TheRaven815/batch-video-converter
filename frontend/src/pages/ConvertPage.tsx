@@ -489,7 +489,11 @@ function Mp4RepairCard() {
   const canUseBrowser = app.selectedPaths.size > 0;
 
   const handleRepair = async () => {
-    let payload: { source_root_key?: string | null; source_path?: string | null; input_filename?: string | null } | null = null;
+    let payload: {
+      source_root_key?: string | null;
+      source_path?: string | null;
+      input_filename?: string | null;
+    } | null = null;
     if (selected && stagedOptions.find((s) => s.id === selected)) {
       const item = stagedOptions.find((s) => s.id === selected)!;
       if (item.uploaded) {
@@ -525,12 +529,17 @@ function Mp4RepairCard() {
         <Wrench size={14} /> MP4 Onar (faststart + genpts)
       </span>
       <p className="text-xs text-zinc-400">
-        Bozuk moov/faststart olmayan MP4 dosyalarını yerinde onarır. Kaynak tarayıcıdan veya hazırlanan dosyalardan bir MP4 seçin.
+        Bozuk moov/faststart olmayan MP4 dosyalarını yerinde onarır. Kaynak tarayıcıdan veya
+        hazırlanan dosyalardan bir MP4 seçin.
       </p>
       {stagedOptions.length > 0 && (
         <div className="form-group">
           <label className="form-label">Hazırlanan MP4 dosyası</label>
-          <select className="form-input" value={selected ?? ''} onChange={(e) => setSelected(e.target.value || null)}>
+          <select
+            className="form-input"
+            value={selected ?? ''}
+            onChange={(e) => setSelected(e.target.value || null)}
+          >
             <option value="">— Seçin (veya tarayıcı seçimini kullan) —</option>
             {stagedOptions.map((item) => (
               <option key={item.id} value={item.id}>

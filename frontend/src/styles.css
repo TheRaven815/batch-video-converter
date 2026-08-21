@@ -2495,8 +2495,7 @@ select.form-input {
 
   body:has(.convert-actions) [data-sonner-toaster] {
     bottom: calc(
-      var(--mobile-nav-height) + var(--mobile-action-height) + 0.75rem +
-        env(safe-area-inset-bottom)
+      var(--mobile-nav-height) + var(--mobile-action-height) + 0.75rem + env(safe-area-inset-bottom)
     ) !important;
   }
 }
