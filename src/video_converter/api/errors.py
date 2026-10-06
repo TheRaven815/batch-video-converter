@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from video_converter.core.models import ErrorEnvelope, StructuredErrorResponse
@@ -77,3 +78,12 @@ async def structured_http_exception_handler(request: Request, exc: HTTPException
         content=envelope.model_dump(),
         headers=exc.headers,
     )
+
+
+async def structured_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    messages = [f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()]
+    envelope = StructuredErrorResponse(error=ErrorEnvelope(
+        code="validation_error", message="; ".join(messages), recoverable=True,
+        details={"path": request.url.path},
+    ))
+    return JSONResponse(status_code=422, content=envelope.model_dump())

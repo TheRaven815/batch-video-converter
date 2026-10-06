@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import video_converter.api.main as api
@@ -77,6 +82,8 @@ def _make_client(tmp_path: Path, monkeypatch) -> tuple[TestClient, Path]:
             "media_roots": (MediaRoot(key="root", label="Root", path=media_root.resolve()),),
             "worker_concurrency": 1,
             "max_upload_bytes": 10 * 1024 * 1024,
+            "min_free_disk_bytes": 0,
+            "ffmpeg_stall_timeout_seconds": 30,
         },
     )()
     fake = _FakeRedis()
@@ -108,23 +115,165 @@ def test_mp4_fix_endpoint_exists_and_rejects_traversal(tmp_path: Path, monkeypat
 
 def test_mp4_fix_endpoint_success_with_mocked_ffmpeg(tmp_path: Path, monkeypatch) -> None:
     client, media_root = _make_client(tmp_path, monkeypatch)
+    import video_converter.worker.main as worker
+
     try:
         video = media_root / "clip.mp4"
-        video.write_bytes(b"fake-mp4")
+        video.write_bytes(b"source-mp4")
+        video.chmod(0o444)
+        media_root.chmod(0o555)
+        monkeypatch.setattr(worker, "settings", SimpleNamespace(data_root=tmp_path / "stale"))
 
-        def fake_fix_mp4(source_path: Path, output_path: Path | None = None) -> Path:
-            assert Path(source_path).resolve() == video.resolve()
-            return Path(source_path)
+        class FakeProcess:
+            returncode = 0
 
-        monkeypatch.setattr("video_converter.worker.main.fix_mp4", fake_fix_mp4)
+            def __init__(self, cmd, **kwargs):
+                assert Path(cmd[cmd.index("-i") + 1]) == video.resolve()
+                target = Path(cmd[-1])
+                assert target.is_relative_to((tmp_path / "data" / "temp").resolve())
+                target.write_bytes(b"repaired-mp4")
 
+            def wait(self, timeout):
+                assert 0 < timeout <= 0.25
+                return 0
+
+            def poll(self):
+                return 0
+
+        monkeypatch.setattr(worker.subprocess, "Popen", FakeProcess)
+        responses = [
+            client.post(
+                "/api/v1/tools/mp4-fix",
+                json={"source_root_key": "root", "source_path": "clip.mp4"},
+            )
+            for _ in range(2)
+        ]
+        filenames = []
+        for resp in responses:
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["status"] == "fixed"
+            assert body["filename"] != video.name
+            filenames.append(body["filename"])
+            output = tmp_path / "data" / "outputs" / body["filename"]
+            assert output.read_bytes() == b"repaired-mp4"
+            download = client.get(body["download_url"])
+            assert download.status_code == 200, download.text
+            assert download.content == b"repaired-mp4"
+        assert filenames[0] != filenames[1]
+        assert video.read_bytes() == b"source-mp4"
+        assert list(media_root.iterdir()) == [video]
+        assert not list((tmp_path / "data" / "temp").iterdir())
+    finally:
+        media_root.chmod(0o755)
+        video.chmod(0o644)
+        api.app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("failure,status", [("ffmpeg", 500), ("disk", 507)])
+def test_mp4_fix_failure_leaves_source_and_outputs_unchanged(tmp_path, monkeypatch, failure, status):
+    client, media_root = _make_client(tmp_path, monkeypatch)
+    import video_converter.worker.main as worker
+
+    video = media_root / "clip.mp4"
+    video.write_bytes(b"source-mp4")
+
+    class FailedProcess:
+        returncode = 1
+
+        def __init__(self, cmd, **kwargs):
+            Path(cmd[-1]).write_bytes(b"partial")
+            kwargs["stderr"].write(b"broken MP4")
+
+        def wait(self, timeout):
+            return 1
+
+        def poll(self):
+            return 1
+
+    if failure == "disk":
+        monkeypatch.setattr(worker.shutil, "disk_usage", lambda path: SimpleNamespace(free=0))
+    else:
+        monkeypatch.setattr(worker.subprocess, "Popen", FailedProcess)
+    try:
         resp = client.post(
             "/api/v1/tools/mp4-fix",
             json={"source_root_key": "root", "source_path": "clip.mp4"},
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["filename"] == "clip.mp4"
-        assert body["status"] == "fixed"
+        assert resp.status_code == status, resp.text
+        assert video.read_bytes() == b"source-mp4"
+        assert not list((tmp_path / "data" / "outputs").iterdir())
+        assert not list((tmp_path / "data" / "temp").iterdir())
     finally:
         api.app.dependency_overrides.clear()
+
+
+def test_mp4_fix_rejects_upload_traversal(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    try:
+        resp = client.post("/api/v1/tools/mp4-fix", json={"input_filename": "../outside.mp4"})
+        assert resp.status_code == 400
+        from types import SimpleNamespace
+        from video_converter.api import auth
+
+        monkeypatch.setattr(auth, "get_settings", lambda: SimpleNamespace(
+            app_username="admin", app_password="configured-test-password",
+            jwt_secret="test-secret-with-at-least-32-bytes",
+        ))
+        monkeypatch.setattr(auth, "_storage_client", _FakeRedis())
+        api.app.dependency_overrides.clear()
+        assert client.post("/api/v1/tools/mp4-fix", json={}).status_code == 401
+    finally:
+        api.app.dependency_overrides.clear()
+
+
+def test_mp4_fix_disconnect_stops_child_and_cleans_temp(tmp_path, monkeypatch):
+    client, media_root = _make_client(tmp_path, monkeypatch)
+    import video_converter.worker.main as worker
+    from video_converter.api.routers import tools
+    from video_converter.core.models import Mp4FixRequest
+
+    source = media_root / "clip.mp4"
+    source.write_bytes(b"source")
+    processes = []
+
+    class Process:
+        returncode = None
+        terminated = False
+
+        def __init__(self, cmd, **kwargs):
+            Path(cmd[-1]).write_bytes(b"partial")
+            processes.append(self)
+
+        def wait(self, timeout=None):
+            if not self.terminated:
+                import subprocess
+                raise subprocess.TimeoutExpired("ffmpeg", timeout)
+            self.returncode = -15
+            return -15
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+
+    class DisconnectedRequest:
+        async def is_disconnected(self):
+            return bool(processes)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", Process)
+    try:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(tools.mp4_fix(
+                Mp4FixRequest(source_root_key="root", source_path="clip.mp4"),
+                DisconnectedRequest(),
+            ))
+        assert error.value.status_code == 499
+        assert processes[0].terminated
+        assert source.read_bytes() == b"source"
+        assert not list((tmp_path / "data" / "outputs").iterdir())
+        assert not list((tmp_path / "data" / "temp").iterdir())
+    finally:
+        api.app.dependency_overrides.clear()
+        client.close()

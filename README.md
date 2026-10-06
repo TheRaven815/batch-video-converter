@@ -111,8 +111,36 @@ Key parts:
 Notes:
 
 - WebM `audio_export=copy` falls back to `opus` for stability (see `worker/main.py:_resolve_export_options`).
+- Explicit WebM audio accepts only `opus` or `copy`; AAC/MP3 are rejected before
+  queueing, including batch and validation requests. MP4/MKV accept AAC/MP3/Opus
+  and copy. Container changes preserve an incompatible audio preference until
+  the user chooses a valid option; the UI explains the conflict instead of
+  silently changing the codec. MP4/Opus muxing is allowed, not a guarantee of
+  playback on every device.
 - Audio `copy` is validated per container; incompatible source codecs are transcoded.
+- Video `quality_crf` is optional/nullable: omitted quality, no target bitrate, and
+  original resolution allow compatible H.264 stream copy. Any explicit CRF
+  (including `0`), target video bitrate, or resized resolution forces encoding.
+  The UI explicitly sends its quality setting, so normal UI conversions encode;
+  this costs more CPU than the previous incorrect copy behavior. Software CRF=0
+  retains x264's lossless behavior; target video bitrate takes precedence over CRF.
+  V4L2 encoders support bitrate rather than CRF, so `auto` with explicit CRF and
+  no target bitrate uses software. An explicit `v4l2m2m` request fails if hardware
+  is unavailable or cannot honor the requested settings. Only a successful
+  bounded startup encode probe advertises hardware; `auto` retries a failed
+  hardware encode in software unless the job was cancelled or worker stopped.
+- Explicit audio codec and bitrate apply to both automatic and selected audio
+  streams. `audio_channel_mode=downmix2` produces stereo and requires encoding,
+  including when audio copy was selected (AAC fallback, or Opus for WebM).
 - Subtitle languages are probed with `ffprobe`; `und` (undefined) is selectable.
+  Explicit subtitle indexes take precedence over language; duplicates are removed
+  in selection order. A language selects all matching streams in source order;
+  without either selection, the first subtitle is used. Mapping uses numeric
+  ffprobe indexes. Separate files use language suffixes when multiple tracks
+  match. Missing tracks, failed SRT extraction and unsupported bitmap subtitles
+  are reported in `JobRecord.warnings`, the dashboard and job details; successfully
+  produced video remains completed with warnings. Bitmap subtitles can be copied
+  into MKV but cannot be converted to text without OCR.
 
 ## Requirements
 
@@ -157,6 +185,13 @@ APP_DATA_SOURCE=app-data   # local: ./data  ·  Coolify: app-data (named volume)
 
 > If a host folder contains spaces, keep the quotes: `MEDIA_SERIES_SOURCE="/srv/media/TV Series"`. The compose file quotes the bind source so spaces are safe.
 
+Compose forwards `APP_USERNAME`, `APP_PASSWORD`, and `JWT_SECRET` from `.env` or
+the deployment environment to the app container. Stored UI credentials take
+precedence over environment credentials. If `APP_PASSWORD` is empty, complete
+first-run setup on a private network before exposing the service publicly.
+An empty `JWT_SECRET` keeps automatic secret generation/persistence enabled;
+preserve the app data volume across restarts.
+
 3. Create runtime folders for local dev (skip on Coolify where `app-data` volume is used):
 
 ```bat
@@ -194,6 +229,35 @@ Do not expose Redis publicly in production. Keep it inside the Docker network or
 ## Local Development Without Docker
 
 The Python package uses a `src/` layout. Tests get `pythonpath = src` from `pytest.ini`; manual commands should use `PYTHONPATH=src` or the `run_local.py` launcher.
+
+### Windows: automatic setup and startup
+
+Double-click `run_local.bat` or run it from a terminal:
+
+```bat
+run_local.bat
+run_local.bat --no-browser --port 8766
+run_local.bat --api-only
+```
+
+The batch launcher works from any working directory. It creates `venv` if missing,
+installs runtime packages from `requirements.txt`, and passes all arguments to
+`run_local.py`, which builds the frontend and starts the API and worker. Existing
+`.env` settings and application data are preserved; the default storage is local
+SQLite, so Redis is not required unless configured explicitly.
+
+Missing Python 3.11+, compatible Node.js/npm, or FFmpeg tools are installed through
+`winget` (Microsoft App Installer). First setup requires internet access; Windows
+may request administrator permission for tool installation. If `winget` is absent,
+the launcher reports the missing tool and stops. An existing broken or outdated
+`venv` is not deleted automatically: rename it and rerun the launcher.
+
+The default URL is `http://localhost:8765/`. Stop services with `Ctrl+C`. Startup
+failures keep the window open; set `CI=1` to disable that prompt in automation.
+To check the bootstrap and argument forwarding without starting services, run
+`run_local.bat --help`.
+
+### Manual setup (Windows, Linux, macOS)
 
 Create a Python environment:
 
@@ -326,12 +390,124 @@ Always start the same file:
 docker compose up --build -d
 ```
 
-On Raspberry Pi 4, set `V4L2_DEVICE=/dev/video11` in `.env` for hardware H.264. Leave unset on Pi 5 (no H.264 HW encoder). Keep `WORKER_CONCURRENCY=1` on constrained devices.
+Default deployment maps no video devices. Raspberry Pi 5 has no hardware H.264
+encoder; use software encoding. Keep `WORKER_CONCURRENCY=1` on constrained devices.
 
 When adding media roots, update both places:
 
 1. `Label=/container/path` in `MEDIA_MOUNTS` (`.env`).
 2. Host path variable (`MEDIA_*_SOURCE`) in `.env` / `docker-compose.yml` volume.
+
+### Optional Raspberry Pi 4 Hardware Device
+
+Only opt in on Pi 4 with a **real, working H.264 encoder device**, normally
+`/dev/video11`. Device existence alone does not prove encoding support; the worker
+probes an actual encode before advertising hardware support. Do not map `/dev/null`
+or add a fake video node. The old device environment override is no longer used.
+
+On the Linux Docker host, initialize writable app data with the standard
+`docker compose up --build -d` command above first. Then apply an inline override
+(no second permanent Compose file):
+
+```sh
+test -c /dev/video11 || { echo 'Missing real Pi 4 encoder device'; exit 1; }
+VIDEO_GID="$(stat -c '%g' /dev/video11)"
+docker compose -f docker-compose.yml -f - up -d <<YAML
+services:
+  app:
+    user: "1000:1000"
+    group_add:
+      - "$VIDEO_GID"
+    devices:
+      - /dev/video11:/dev/video11
+YAML
+```
+
+Explicit uid/gid retains the device's supplemental group instead of losing it
+when the root entrypoint drops privileges. Initial standard startup prepares
+app-data ownership for uid 1000. Substitute the verified encoder node if different;
+never apply this override on Pi 5. Repeat the inline override for later Pi 4
+deployments; plain `docker compose up -d` restores device-free defaults.
+
+### Raspberry Pi 5 CPU and Memory Limits
+
+Compose already enforces native Docker resource limits; no Python CPU limiter is
+needed. Defaults remain `APP_CPU_LIMIT=2.0`, `REDIS_CPU_LIMIT=0.5`,
+`APP_MEMORY_LIMIT=2g`, and `REDIS_MEMORY_LIMIT=256m`. Recommended Pi 5 starting
+overrides in `.env` (or Coolify's environment):
+
+```env
+APP_CPU_LIMIT=1.5
+REDIS_CPU_LIMIT=0.25
+APP_MEMORY_LIMIT=2g
+REDIS_MEMORY_LIMIT=256m
+WORKER_CONCURRENCY=1
+FFMPEG_THREADS=1
+```
+
+Apply changes with `docker compose up -d` (or redeploy in Coolify). CPU values are
+logical-core equivalents: on a four-core Pi 5, app=1.5 is about 37.5% of total
+CPU capacity. API, worker, FFmpeg and ffprobe children **share the app quota**.
+Redis has its **own** 0.25-core quota; their combined CPU-time ceiling is 1.75
+cores, about 43.75% of four cores. Host processes, Coolify and other containers
+remain outside these limits: this is **not a whole-machine CPU cap**. Use app=1.0
+if other heavy services need more headroom. Quotas limit CPU time per scheduling
+period, not core affinity; short bursts are possible.
+
+`WORKER_CONCURRENCY` (1–8) is the hard ceiling for simultaneous jobs; the UI can
+reduce it, never exceed it. `FFMPEG_THREADS` (1–32) bounds codec/filter thread
+pools; threads and job count affect pressure, but neither enforces a CPU-time
+quota. Compose CPU/memory variables have **no effect when running Python outside
+Docker**. Memory limits apply per container; exceeding them can trigger an OOM
+kill. Keep defaults initially and monitor peak RAM, especially for high-resolution
+encodes and Redis AOF persistence.
+
+On the target Linux Docker host, verify the effective configuration, not just
+`.env`. First inspect both containers:
+
+```sh
+docker inspect "$(docker compose ps -q app)" "$(docker compose ps -q redis)" \
+  --format '{{.Name}} NanoCpus={{.HostConfig.NanoCpus}} Memory={{.HostConfig.Memory}} CpuQuota={{.HostConfig.CpuQuota}} CpuPeriod={{.HostConfig.CpuPeriod}}'
+```
+
+With the recommended overrides, expect `NanoCpus=1500000000` for app and
+`250000000` for Redis; memory bytes should be `2147483648` and `268435456`.
+If the engine uses `CpuQuota`/`CpuPeriod` instead, their ratio must be 1.5/0.25
+respectively. Check the kernel's actual cgroup limits and throttling counters:
+
+```sh
+for service in app redis; do
+  echo "=== $service ==="
+  docker compose exec -T "$service" sh -c '
+    if [ -f /sys/fs/cgroup/cpu.max ]; then
+      cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/cpu.stat
+    else
+      for cpu in /sys/fs/cgroup/cpu /sys/fs/cgroup/cpu,cpuacct; do
+        if [ -f "$cpu/cpu.cfs_quota_us" ]; then
+          cat "$cpu/cpu.cfs_quota_us" "$cpu/cpu.cfs_period_us" "$cpu/cpu.stat"
+          break
+        fi
+      done
+      cat /sys/fs/cgroup/memory/memory.limit_in_bytes
+    fi'
+done
+docker stats "$(docker compose ps -q app)" "$(docker compose ps -q redis)"
+```
+
+Cgroup v2 `cpu.max` is `quota period` (often `150000 100000` for app and
+`25000 100000` for Redis); v1 prints quota and period separately. Ratios must
+match the intended CPU limits. `max` on v2 or `-1` quota on v1 means unlimited;
+do not assume protection if inspect/cgroup values disagree. During a long real
+conversion, watch `docker stats` and compare `cpu.stat` before/after for
+throttling under contention. Stats uses a one-core scale: app may approach 150%
+and Redis 25%, not 37.5%/6.25%. These are ceilings, not required usage; a
+single-thread encode or mostly idle Redis may stay below them. Press Ctrl+C to
+stop stats. If limits are missing, update Docker Compose or deployment settings
+and repeat these checks before relying on the quota.
+
+Physical Pi and Docker daemon were unavailable for this change; these target
+runtime checks and real Pi 4 hardware encoding remain **unverified**, not claimed
+as measured results.
 
 ### Coolify
 
@@ -391,13 +567,15 @@ All other variables have safe defaults and can be omitted:
 | `VIDEO_CONVERTER_STORAGE` | `redis` (`config.py:47`) | Only for local dev without Redis: `local` |
 | `REDIS_URL` | `redis://redis:6379/0` (`config.py:46`, `compose:9`) | Only if Redis is not on the compose network |
 | `DATA_ROOT` | `/app-data` (`config.py:48`, `Dockerfile:18`) | Never — fixed to avoid Coolify's reserved `/data` |
-| `WORKER_CONCURRENCY` | `1` | Increase only on strong hardware |
-| `FFMPEG_THREADS` | `1` | 1–32, `WORKER × THREADS` = CPU pressure |
+| `WORKER_CONCURRENCY` | `1` | Hard ceiling (1–8); UI may only reduce simultaneous jobs |
+| `FFMPEG_THREADS` | `1` | 1–32; bounds codec/filter pools, not CPU-time quota |
 | `FFMPEG_STALL_TIMEOUT_SECONDS` | `300` | Only for very long encodes |
 | `MIN_FREE_DISK_BYTES` / `MAX_UPLOAD_BYTES` | `512 MB` / `10 GB` | Rarely |
 | `APP_USERNAME` / `APP_PASSWORD` | `admin` / *(none)* (`config.py:55`, `auth.py:121`) | **Optional.** If `APP_PASSWORD` is empty (default), the UI shows a first-run setup screen. `APP_USERNAME` is ignored unless `APP_PASSWORD` is set. |
 | `JWT_SECRET` | *(auto-generated at `DATA_ROOT/data/jwt_secret` — `config.py:163`)* | Only to pin a secret across rebuilds |
-| `APP_IMAGE` / `APP_PORT` / `V4L2_DEVICE` / `REDIS_HOST_PORT` | See compose | Only for custom ports or Pi 4 hardware encoder |
+| `APP_CPU_LIMIT` / `REDIS_CPU_LIMIT` | `2.0` / `0.5` (Compose) | Docker quotas; recommended Pi 5: `1.5` / `0.25` |
+| `APP_MEMORY_LIMIT` / `REDIS_MEMORY_LIMIT` | `2g` / `256m` (Compose) | Container RAM caps; monitor peak memory before changing |
+| `APP_IMAGE` / `APP_PORT` / `REDIS_HOST_PORT` | See compose | Only for custom image or ports |
 
 Rules:
 
@@ -442,7 +620,14 @@ Media and outputs (Bearer token required):
 - `GET /api/v1/outputs` — list generated outputs.
 - `GET /api/v1/outputs/{filename}/download` — sanitized download.
 - `GET /api/v1/worker/health` — queue depth, running count, storage health.
-- `POST /api/v1/tools/mp4-fix` — repair MP4 (`+genpts` + `+faststart`, stream copy).
+- `POST /api/v1/tools/mp4-fix` — remux a new MP4 copy (`+genpts` + `+faststart`)
+  under `DATA_ROOT/outputs`; source remains unchanged. Response includes the new
+  `filename` and authenticated `download_url`. Partial work stays in `DATA_ROOT/temp`;
+  FFmpeg failure, cancellation, timeout, or insufficient disk space does not
+  publish partial output. Cancel disconnects the request and stops the repair;
+  cancellation cannot undo a copy already published. Timeout uses the configured
+  `FFMPEG_STALL_TIMEOUT_SECONDS` as a total repair deadline. Remux cannot reconstruct
+  missing `moov` metadata.
 
 System settings (Bearer token required):
 

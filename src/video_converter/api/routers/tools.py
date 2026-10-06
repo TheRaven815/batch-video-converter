@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import threading
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from video_converter.api.auth import get_current_user
 from video_converter.core.models import Mp4FixRequest, Mp4FixResponse
@@ -86,28 +89,57 @@ def _resolve_input_path(payload: Mp4FixRequest) -> Path:
     response_model=Mp4FixResponse,
     dependencies=[Depends(get_current_user)],
 )
-async def mp4_fix(payload: Mp4FixRequest) -> Mp4FixResponse:
+async def mp4_fix(payload: Mp4FixRequest, request: Request) -> Mp4FixResponse:
     input_path = _resolve_input_path(payload)
 
     # Only mp4-ish inputs make sense for faststart fix; warn-free but enforce extension
     if input_path.suffix.lower() not in {".mp4", ".m4v", ".mov"}:
         raise HTTPException(status_code=422, detail="mp4-fix only supports .mp4/.m4v/.mov files")
 
-    # Run the legacy fix:  ffmpeg -y -fflags +genpts -i in -map 0 -c copy -movflags +faststart tmp && replace
-    def _run() -> None:
-        from video_converter.worker.main import fix_mp4
+    from video_converter.api import routes as routes_module
+    from video_converter.core.config import get_settings
+    from video_converter.worker.main import fix_mp4
 
-        fix_mp4(input_path)
+    cfg = getattr(routes_module, "settings", None) or get_settings()
+    cancel_event = threading.Event()
 
+    async def watch_disconnect() -> None:
+        while not cancel_event.is_set():
+            if await request.is_disconnected():
+                cancel_event.set()
+                return
+            await asyncio.sleep(0.1)
+
+    disconnect_task = asyncio.create_task(watch_disconnect())
+    repair_task = asyncio.create_task(
+        asyncio.to_thread(fix_mp4, input_path, runtime_settings=cfg, cancel_event=cancel_event)
+    )
     try:
-        await asyncio.to_thread(_run)
+        output_path = await asyncio.shield(repair_task)
+    except asyncio.CancelledError:
+        cancel_event.set()
+        await asyncio.gather(repair_task, return_exceptions=True)
+        raise
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        status = 499 if cancel_event.is_set() else 500
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OSError as exc:
+        status = 507 if exc.errno == errno.ENOSPC else 500
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    finally:
+        cancel_event.set()
+        disconnect_task.cancel()
+        await asyncio.gather(disconnect_task, return_exceptions=True)
 
     return Mp4FixResponse(
-        filename=input_path.name,
+        filename=output_path.name,
+        download_url=f"/api/v1/outputs/{quote(output_path.name, safe='')}/download",
         source_path=payload.source_path,
-        message="MP4 onarıldı (faststart + genpts)",
+        message="Onarılmış MP4 kopyası oluşturuldu. Kaynak dosya değiştirilmedi.",
     )

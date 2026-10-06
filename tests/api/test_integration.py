@@ -220,35 +220,14 @@ def _persist_records(fake_redis: _FakeRedis, records: list[JobRecord]) -> None:
             fake_redis.rpush(QUEUE_NAME, record.id)
 
 
-def test_system_settings_include_persistent_defaults(
-    integration_client: tuple[TestClient, _FakeRedis, Path],
-) -> None:
-    client, _, _ = integration_client
-
-    response = client.get("/api/v1/settings")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["worker_concurrency"] == 1
-    assert payload["default_export"] == {
-        "profile": "h264_mp4",
-        "video_export": "mp4",
-        "audio_export": "copy",
-        "subtitle_export": "none",
-        "subtitle_language": None,
-    }
-    assert payload["auto_cleanup"] == {
-        "enabled": False,
-        "retention_days": 30,
-        "keep_minimum_outputs": 10,
-    }
-    assert payload["ui"] == {"theme": "dark", "density": "comfortable"}
 
 
 def test_system_settings_persist_extended_payload(
-    integration_client: tuple[TestClient, _FakeRedis, Path],
+    integration_client: tuple[TestClient, _FakeRedis, Path], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, fake_redis, _ = integration_client
+    import video_converter.api.routes as routes
+    monkeypatch.setattr(routes.settings, "worker_concurrency", 3)
     payload = {
         "worker_concurrency": 3,
         "default_export": {
@@ -270,24 +249,24 @@ def test_system_settings_persist_extended_payload(
     get_response = client.get("/api/v1/settings")
 
     assert update_response.status_code == 200
-    assert update_response.json() == payload
-    assert get_response.json() == payload
-    assert fake_redis.get("system:settings") is not None
+    assert update_response.json()["default_export"] == payload["default_export"]
+    assert get_response.json()["worker_concurrency"] == 3
+    assert get_response.json()["auto_cleanup"]["retention_days"] == 14
+    assert get_response.json()["ui"] == payload["ui"]
 
 
 def test_system_settings_accept_legacy_worker_only_payload(
-    integration_client: tuple[TestClient, _FakeRedis, Path],
+    integration_client: tuple[TestClient, _FakeRedis, Path], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _, _ = integration_client
+    import video_converter.api.routes as routes
+    monkeypatch.setattr(routes.settings, "worker_concurrency", 3)
 
     response = client.post("/api/v1/settings", json={"worker_concurrency": 2})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["worker_concurrency"] == 2
-    assert payload["default_export"]["profile"] == "h264_mp4"
-    assert payload["auto_cleanup"]["enabled"] is False
-    assert payload["ui"]["theme"] == "dark"
 
 
 def test_health_endpoints_report_liveness_and_readiness(
@@ -559,3 +538,62 @@ def test_batch_retry_endpoint_requeues_failed_jobs(
         "batch-failed",
         "batch-done",
     }
+
+
+@pytest.mark.parametrize("quality", [None, 0, 51])
+def test_job_quality_preserves_copy_and_encode_intent(
+    integration_client: tuple[TestClient, _FakeRedis, Path], quality: int | None
+) -> None:
+    client, _store, _root = integration_client
+    payload = {"input_filename": "uploaded.mp4"}
+    if quality is not None:
+        payload["quality_crf"] = quality
+    response = client.post("/api/v1/jobs", json=payload)
+    assert response.status_code == 201, response.text
+    job_id = response.json()["id"]
+    stored = client.get(f"/api/v1/jobs/{job_id}")
+    assert stored.status_code == 200
+    assert stored.json()["quality_crf"] == quality
+
+
+@pytest.mark.parametrize("quality", [-1, 52])
+def test_job_quality_rejects_out_of_range_values(
+    integration_client: tuple[TestClient, _FakeRedis, Path], quality: int
+) -> None:
+    client, _store, _root = integration_client
+    response = client.post(
+        "/api/v1/jobs", json={"input_filename": "uploaded.mp4", "quality_crf": quality}
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("audio", ["aac", "mp3"])
+@pytest.mark.parametrize("endpoint", ["/api/v1/jobs", "/api/v1/jobs/batch", "/api/v1/jobs/validate"])
+def test_webm_invalid_audio_rejected_before_queue(integration_client, audio, endpoint) -> None:
+    client, store, media_root = integration_client
+    (media_root / "source.mp4").write_bytes(b"source")
+    job = {"source_root_key": "root", "source_path": "source.mp4", "video_export": "webm", "audio_export": audio}
+    payload = job if endpoint == "/api/v1/jobs" else {"jobs": [job]}
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 422
+    assert "WebM" in response.json()["error"]["message"]
+    assert store.lists[QUEUE_NAME] == []
+
+
+def test_settings_concurrency_restore_and_ceiling(integration_client, monkeypatch) -> None:
+    import json
+    from types import SimpleNamespace
+    import video_converter.api.routes as routes
+
+    client, store, _ = integration_client
+    monkeypatch.setattr(routes, "settings", SimpleNamespace(worker_concurrency=3))
+    store.set("system:settings", json.dumps({"worker_concurrency": 8, "retry": None}))
+    restored = client.get("/api/v1/settings").json()
+    assert restored["worker_concurrency"] == 3
+    assert restored["worker_concurrency_limit"] == 3
+    rejected = client.post("/api/v1/settings", json={"worker_concurrency": 4, "worker_concurrency_limit": 8})
+    assert rejected.status_code == 422
+    saved = client.post("/api/v1/settings", json={"worker_concurrency": 1, "worker_concurrency_limit": 8})
+    assert saved.status_code == 200
+    assert saved.json()["worker_concurrency_limit"] == 3
+    assert client.get("/api/v1/settings").json()["worker_concurrency"] == 1

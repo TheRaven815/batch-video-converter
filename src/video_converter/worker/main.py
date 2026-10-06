@@ -19,7 +19,7 @@ import redis
 
 from video_converter.core.config import WORKER_HEARTBEAT_KEY, ensure_runtime_dirs, get_settings
 from video_converter.core.job_repository import DEFAULT_STALE_RUNNING_SECONDS, JobRepository
-from video_converter.core.models import JobStatus, now_iso
+from video_converter.core.models import JobStatus, RetrySettings, now_iso, validate_audio_container
 from video_converter.core.path_validation import validate_source_path
 from video_converter.core.storage import create_storage_client, is_redis_storage
 
@@ -216,6 +216,7 @@ def _resolve_export_options(data: dict[str, Any]) -> tuple[str, str, str, str, s
 
     video_export = raw_video if raw_video in {"mp4", "mkv", "webm"} else legacy_video
     audio_export = raw_audio if raw_audio in {"copy", "aac", "mp3", "opus"} else legacy_audio
+    validate_audio_container(video_export, audio_export)
     subtitle_export = (
         raw_subtitle if raw_subtitle in {"none", "embedded", "separate_srt"} else "none"
     )
@@ -260,46 +261,112 @@ def _atomic_move(src: Path, dst: Path) -> None:
             raise
 
 
-def fix_mp4(source_path: Path, output_path: Path | None = None) -> Path:
-    """Repair MP4 with ``ffmpeg -fflags +genpts -c copy -movflags +faststart``.
+def fix_mp4(
+    source_path: Path,
+    output_path: Path | None = None,
+    *,
+    runtime_settings: Any | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    """Remux an immutable source into a new MP4 under DATA_ROOT/outputs."""
+    import tempfile
+    import uuid
 
-    Mirrors ``scripts/legacy/mp4_fix.py``: remux to a temporary file and
-    atomically replace the target. When *output_path* is ``None`` the source
-    is repaired in-place (same behaviour as the legacy script).
-    """
-
+    cfg = runtime_settings if runtime_settings is not None else get_settings()
     src = Path(source_path).resolve()
-    if not src.exists() or not src.is_file():
+    if not src.is_file():
         raise FileNotFoundError(f"source not found: {src}")
-    dst = Path(output_path).resolve() if output_path is not None else src
-    # Temp file sits next to the destination to keep the replace atomic.
-    tmp = dst.with_name(dst.stem + ".fixed.tmp.mp4")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-fflags",
-        "+genpts",
-        "-i",
-        str(src),
-        "-map",
-        "0",
-        "-c",
-        "copy",
-        "-movflags",
-        "+faststart",
-        str(tmp),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
-        detail = (result.stderr or "ffmpeg failed").strip()[-700:]
-        raise RuntimeError(detail)
-    try:
-        _atomic_move(tmp, dst)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
+    data_root = Path(cfg.data_root).resolve()
+    outputs = Path(cfg.outputs_dir).resolve()
+    temp_root = Path(cfg.temp_dir).resolve()
+    if outputs != data_root / "outputs" or temp_root != data_root / "temp":
+        raise ValueError("MP4 repair directories must stay under DATA_ROOT")
+    dst = (
+        Path(output_path).resolve()
+        if output_path is not None
+        else outputs / f"{src.stem[:40]}.fixed.{uuid.uuid4().hex}.mp4"
+    )
+    if dst.parent != outputs or dst.suffix.lower() != ".mp4" or dst == src:
+        raise ValueError("MP4 repair destination must be a new MP4 in DATA_ROOT/outputs")
+    if dst.exists():
+        raise FileExistsError(f"output already exists: {dst.name}")
+    outputs.mkdir(parents=True, exist_ok=True)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    source_size = src.stat().st_size
+    required_bytes = source_size + max(1_048_576, source_size // 20)
+    reserve = max(0, int(getattr(cfg, "min_free_disk_bytes", 536_870_912)))
+    if any(shutil.disk_usage(path).free < required_bytes + reserve for path in (temp_root, outputs)):
+        raise OSError(errno.ENOSPC, "Insufficient free disk space for MP4 repair")
+    timeout = max(1, min(3600, int(getattr(cfg, "ffmpeg_stall_timeout_seconds", 300))))
+    with tempfile.TemporaryDirectory(prefix="mp4-fix-", dir=temp_root) as work_dir:
+        tmp = Path(work_dir) / "repaired.mp4"
+        cmd = [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-fflags",
+            "+genpts",
+            "-i",
+            str(src),
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(tmp),
+        ]
+        with (Path(work_dir) / "ffmpeg.stderr").open("w+b") as error_log:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("MP4 repair cancelled")
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=error_log)
+            deadline = time.monotonic() + timeout
+            try:
+                while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RuntimeError("MP4 repair cancelled")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError(f"MP4 repair timed out after {timeout} seconds")
+                    try:
+                        proc.wait(timeout=min(0.25, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+            if proc.returncode != 0:
+                error_log.seek(max(0, error_log.seek(0, os.SEEK_END) - 700))
+                detail = error_log.read().decode("utf-8", errors="replace").strip()
+                raise RuntimeError(detail or "ffmpeg failed")
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("MP4 repair cancelled")
+        if not tmp.is_file() or tmp.stat().st_size == 0:
+            raise RuntimeError("FFmpeg produced no repaired MP4")
+        if dst.exists():
+            raise FileExistsError(f"output already exists: {dst.name}")
+        try:
+            os.replace(tmp, dst)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # Stage on the output filesystem, keeping incomplete copies out of its file list.
+            with tempfile.TemporaryDirectory(prefix=".mp4-fix-", dir=outputs) as publish_dir:
+                staged = Path(publish_dir) / "repaired.mp4"
+                shutil.copyfile(tmp, staged)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("MP4 repair cancelled")
+                if dst.exists():
+                    raise FileExistsError(f"output already exists: {dst.name}")
+                os.replace(staged, dst)
     return dst
 
 
@@ -324,7 +391,7 @@ def _run_ffprobe_json(
         )
         if proc.returncode != 0:
             return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return None
 
     try:
@@ -335,8 +402,8 @@ def _run_ffprobe_json(
     return payload if isinstance(payload, dict) else None
 
 
-def _probe_subtitle_streams(input_path: Path) -> list[dict[str, str]] | None:
-    """Return subtitle streams as ``{"codec", "language"}`` dicts, or None if probing fails."""
+def _probe_subtitle_streams(input_path: Path) -> list[dict[str, Any]] | None:
+    """Return global subtitle indexes, codecs and languages; None means probe failed."""
     payload = _run_ffprobe_json(
         [
             "ffprobe",
@@ -345,7 +412,7 @@ def _probe_subtitle_streams(input_path: Path) -> list[dict[str, str]] | None:
             "-select_streams",
             "s",
             "-show_entries",
-            "stream=codec_name:stream_tags=language",
+            "stream=index,codec_name:stream_tags=language",
             "-of",
             "json",
             str(input_path),
@@ -358,13 +425,18 @@ def _probe_subtitle_streams(input_path: Path) -> list[dict[str, str]] | None:
     if not isinstance(streams, list):
         return None
 
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for stream in streams:
         if not isinstance(stream, dict):
+            continue
+        try:
+            index = int(stream["index"])
+        except (KeyError, TypeError, ValueError):
             continue
         tags = stream.get("tags") if isinstance(stream.get("tags"), dict) else {}
         result.append(
             {
+                "index": index,
                 "codec": str(stream.get("codec_name") or "").strip().lower(),
                 "language": str((tags or {}).get("language") or "").strip().lower(),
             }
@@ -372,9 +444,6 @@ def _probe_subtitle_streams(input_path: Path) -> list[dict[str, str]] | None:
     return result
 
 
-def _probe_subtitle_languages(input_path: Path) -> set[str]:
-    streams = _probe_subtitle_streams(input_path) or []
-    return {stream["language"] for stream in streams if stream["language"]}
 
 
 def _probe_all_streams(input_path: Path) -> dict[str, list[dict[str, Any]]] | None:
@@ -499,20 +568,6 @@ def _calculate_bitrate(channels: int | None) -> str:
     return f"{96 * ch}k"
 
 
-def _is_audio_codec_copy_compatible(video_export: str, audio_codec: str | None) -> bool:
-    """Check if *audio_codec* can be copied into *video_export* container without transcode."""
-    if video_export == "mkv":
-        # MKV supports virtually any audio codec (even unknown)
-        return True
-    if not audio_codec:
-        return False
-    codec = audio_codec.strip().lower()
-    if video_export == "mp4":
-        return codec in {"aac", "ac3", "mp3", "eac3", "alac"}
-    if video_export == "webm":
-        return codec in {"opus", "vorbis"}
-    return False
-
 
 def _audio_copy_fallback(
     audio_export: str,
@@ -544,12 +599,33 @@ def _audio_copy_fallback(
     return audio_export
 
 
+def _audio_encoder_args(
+    audio_export: str,
+    bitrate: str | None,
+    channels: int | None,
+    stream_suffix: str = "",
+) -> list[str]:
+    if audio_export == "copy":
+        return [f"-c:a{stream_suffix}", "copy"]
+    codec, default_bitrate = {
+        "aac": ("aac", "128k"),
+        "mp3": ("libmp3lame", "192k"),
+        "opus": ("libopus", "96k"),
+    }.get(audio_export, ("aac", "128k"))
+    args = [f"-c:a{stream_suffix}", codec, f"-b:a{stream_suffix}", bitrate or default_bitrate]
+    if channels is not None:
+        args.extend([f"-ac:a{stream_suffix}", str(channels)])
+    return args
+
+
 def _build_audio_ffmpeg_args(
     video_export: str,
     audio_stream_indexes: list[int] | None,
     audio_codec_map: dict[int, str | None] | None,
     audio_channels_map: dict[int, int | None] | None,
     audio_channel_mode: str | None,
+    audio_export: str,
+    audio_bitrate_kbps: int | None,
 ) -> tuple[list[str], list[str]]:
     """Build maps and per-stream codec args for multi-audio.
 
@@ -588,28 +664,11 @@ def _build_audio_ffmpeg_args(
             channels = 2
         # Clamp
         channels = max(1, min(8, channels))
-        bitrate = _calculate_bitrate(channels)
-
-        # Determine copy compatibility for this container/codec
-        if _is_audio_codec_copy_compatible(video_export, codec_norm):
-            codec_args.extend([f"-c:a:{n}", "copy"])
-        else:
-            if video_export == "webm":
-                # webm fallback is opus (libopus)
-                codec_args.extend(
-                    [f"-c:a:{n}", "libopus", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)]
-                )
-            elif video_export == "mkv":
-                # MKV should copy all, but if we are here it means unknown codec?
-                # For safety fallback to aac
-                codec_args.extend(
-                    [f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)]
-                )
-            else:
-                # mp4 and others -> aac
-                codec_args.extend(
-                    [f"-c:a:{n}", "aac", f"-b:a:{n}", bitrate, f"-ac:a:{n}", str(channels)]
-                )
+        bitrate = f"{audio_bitrate_kbps}k" if audio_bitrate_kbps is not None else _calculate_bitrate(channels)
+        mode = _audio_copy_fallback(audio_export, video_export, codec_norm)
+        if mode == "copy" and audio_channel_mode == "downmix2":
+            mode = "opus" if video_export == "webm" else "aac"
+        codec_args.extend(_audio_encoder_args(mode, bitrate, channels, f":{n}"))
     return maps, codec_args
 
 
@@ -625,6 +684,7 @@ def _subtitle_codec_for_container(output_path: Path) -> str:
 def _srt_suffix_for_lang(lang: str, count: int) -> str:
     """Legacy suffix: first occurrence '.<lang>.srt', next '.<lang><count>.srt'."""
     normalized = str(lang or "und").strip().lower() or "und"
+    normalized = "".join(char for char in normalized if char.isascii() and (char.isalnum() or char in "_-")) or "und"
     return f".{normalized}.srt" if count == 0 else f".{normalized}{count}.srt"
 
 
@@ -649,8 +709,20 @@ def _ffmpeg_command(
     audio_codec_map: dict[int, str | None] | None = None,
     audio_channels_map: dict[int, int | None] | None = None,
     audio_channel_mode: str | None = None,
+    subtitle_stream_indexes: list[int] | None = None,
 ) -> list[str]:
-    cmd = ["ffmpeg", "-y", "-i", str(input_path)]
+    threads = str(max(1, min(32, ffmpeg_threads)))
+    cmd = ["ffmpeg", "-y", "-filter_threads", threads, "-filter_complex_threads", threads,
+           "-threads", threads, "-i", str(input_path)]
+    prefer_stream_copy_video = (
+        prefer_stream_copy_video
+        and quality_crf is None
+        and not target_video_bitrate
+        and resolution == "original"
+    )
+    if quality_crf is not None and not target_video_bitrate:
+        # V4L2 bitrate-only encoders cannot honor a CRF request.
+        hardware_encoder = None
 
     if prefer_stream_copy_video:
         cmd.extend(["-c:v", "copy"])
@@ -660,6 +732,7 @@ def _ffmpeg_command(
         cmd.extend(["-c:v", "hevc_v4l2m2m", "-b:v", target_video_bitrate or "4M"])
     elif profile == "h265_mp4":
         cmd.extend(["-c:v", "libx265", "-preset", encoder_preset or "medium"])
+        cmd.extend(["-x265-params", f"pools={threads}:frame-threads={threads}"])
     elif profile == "vp9_webm":
         cmd.extend(["-c:v", "libvpx-vp9", "-row-mt", "1"])
     else:
@@ -682,11 +755,12 @@ def _ffmpeg_command(
 
     # Bound each encoder independently so concurrent jobs cannot each consume
     # every CPU visible to the container.
-    cmd.extend(["-threads", str(max(1, min(32, ffmpeg_threads)))])
+    cmd.extend(["-threads", threads])
 
     # -- multi-audio handling (backward compatible) ---------------------------------
     audio_maps, audio_codec_args = _build_audio_ffmpeg_args(
-        video_export, audio_stream_indexes, audio_codec_map, audio_channels_map, audio_channel_mode
+        video_export, audio_stream_indexes, audio_codec_map, audio_channels_map,
+        audio_channel_mode, audio_export, audio_bitrate_kbps,
     )
     has_multi_audio = bool(audio_maps)
 
@@ -696,41 +770,23 @@ def _ffmpeg_command(
         cmd.extend(audio_maps)
         cmd.extend(audio_codec_args)
     else:
-        if audio_export == "copy":
-            cmd.extend(["-c:a", "copy"])
-        elif audio_export == "aac":
-            cmd.extend(["-c:a", "aac", "-b:a", f"{audio_bitrate_kbps or 128}k"])
-        elif audio_export == "mp3":
-            cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k"])
-        elif audio_export == "opus":
-            cmd.extend(["-c:a", "libopus", "-b:a", f"{audio_bitrate_kbps or 96}k"])
-        else:
-            cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+        mode = audio_export
+        if mode == "copy" and audio_channel_mode == "downmix2":
+            mode = "opus" if video_export == "webm" else "aac"
+        bitrate = f"{audio_bitrate_kbps}k" if audio_bitrate_kbps is not None else None
+        channels = 2 if audio_channel_mode == "downmix2" else None
+        cmd.extend(_audio_encoder_args(mode, bitrate, channels))
 
     if subtitle_export == "embedded":
-        # Select exactly one video and one audio stream plus the requested
-        # subtitle stream(s); a bare "-map 0" would also pull attachments and
-        # data streams, which MP4/WebM muxers reject.
-        if has_multi_audio:
-            # Audio maps already added; only add subtitle selection.
-            if subtitle_language:
-                cmd.extend(["-map", f"0:s:m:language:{subtitle_language}?"])
-            else:
-                cmd.extend(["-map", "0:s:0?"])
-        else:
-            if subtitle_language:
-                cmd.extend(
-                    [
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "0:a:0?",
-                        "-map",
-                        f"0:s:m:language:{subtitle_language}?",
-                    ]
-                )
-            else:
-                cmd.extend(["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s:0?"])
+        if subtitle_stream_indexes is None:
+            selected, _warnings = _select_subtitle_streams(
+                _probe_subtitle_streams(input_path), None, subtitle_language, "embedded", video_export
+            )
+            subtitle_stream_indexes = [stream["index"] for stream in selected]
+        if not has_multi_audio:
+            cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        for index in dict.fromkeys(subtitle_stream_indexes):
+            cmd.extend(["-map", f"0:{index}"])
         cmd.extend(["-c:s", _subtitle_codec_for_container(output_path)])
     else:
         # "none" and "separate_srt" must not embed subtitles in the video output.
@@ -1009,37 +1065,53 @@ def _parse_speed_multiplier(value: str | None) -> float | None:
     return _safe_float(value.rstrip("x"))
 
 
-def _downgrade_bitmap_subtitles(
-    subtitle_export: str,
-    subtitle_language: str | None,
-    video_export: str,
-    subtitle_streams: list[dict[str, str]] | None,
-    job_logger: logging.LoggerAdapter,
-) -> str:
-    """Skip embedding when a bitmap subtitle would be selected for an MP4/WebM target.
-
-    Bitmap formats (PGS, VOBSUB, DVB, …) cannot be transcoded to mov_text or
-    webvtt, so attempting to embed them is a guaranteed FFmpeg failure.
-    """
-    if subtitle_export != "embedded" or video_export not in {"mp4", "webm"}:
-        return subtitle_export
-    if not subtitle_streams:
-        return subtitle_export
-
-    if subtitle_language:
-        candidates = [s for s in subtitle_streams if s["language"] == subtitle_language]
+def _select_subtitle_streams(
+    streams: list[dict[str, Any]] | None,
+    indexes: list[int] | None,
+    language: str | None,
+    mode: str,
+    container: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if streams is None:
+        return [], ["Subtitle probe failed; requested subtitles were not exported"]
+    streams = sorted(streams, key=lambda stream: stream["index"])
+    warnings: list[str] = []
+    if indexes:
+        by_index = {stream["index"]: stream for stream in streams}
+        selected = []
+        for index in dict.fromkeys(indexes):
+            if index in by_index:
+                selected.append(by_index[index])
+            else:
+                warnings.append(f"Requested subtitle index {index} was not found")
+    elif language:
+        selected = [stream for stream in streams if stream.get("language") == language.lower()]
+        if not selected:
+            warnings.append(f"Requested subtitle language {language} was not found")
     else:
-        candidates = subtitle_streams[:1]
+        selected = streams[:1]
+        if not selected:
+            warnings.append("No subtitle stream was found")
+    compatible = []
+    for stream in selected:
+        if (mode == "separate_srt" or container in {"mp4", "webm"}) and (
+            stream.get("codec") not in _TEXT_SUBTITLE_CODECS
+        ):
+            warnings.append(
+                f"Subtitle index {stream['index']} ({stream.get('codec') or 'unknown codec'}) "
+                f"cannot be exported as {'SRT' if mode == 'separate_srt' else container}; skipped"
+            )
+        else:
+            compatible.append(stream)
+    return compatible, warnings
 
-    if candidates and any(
-        s["codec"] and s["codec"] not in _TEXT_SUBTITLE_CODECS for s in candidates
-    ):
-        job_logger.warning(
-            "bitmap subtitle stream cannot be embedded into %s; continuing without subtitles",
-            video_export,
-        )
-        return "none"
-    return subtitle_export
+
+def _add_job_warning(job_id: str, message: str, job_logger: logging.LoggerAdapter) -> None:
+    job_logger.warning(message)
+    current = job_repository.get(job_id)
+    if current is not None and message not in current.warnings:
+        current.warnings.append(message)
+        job_repository.persist(current)
 
 
 def process_job(job_id: str) -> None:
@@ -1067,6 +1139,10 @@ def process_job(job_id: str) -> None:
             )
             job_logger.info("job cancelled before processing")
             return
+
+        record.warnings = []
+        record.hardware_acceleration_used = None
+        job_repository.persist(record)
 
         job_repository.update_status(
             job_id,
@@ -1109,38 +1185,41 @@ def process_job(job_id: str) -> None:
             # success, so partial files are never listed or downloadable.
             temp_output_path = settings.temp_dir / output_path.name
             temp_output_path.parent.mkdir(parents=True, exist_ok=True)
-            # Use job-specific temp name to avoid collisions in same-batch concurrent jobs
-            temp_subtitle_path = settings.temp_dir / f"{job_id}.srt"
-
+            selected_subtitles: list[dict[str, Any]] = []
+            subtitle_stream_indexes: list[int] = []
             if subtitle_export in {"embedded", "separate_srt"}:
-                subtitle_streams = _probe_subtitle_streams(input_path)
-                if subtitle_language and subtitle_streams is not None:
-                    available_subtitle_languages = {
-                        stream["language"] for stream in subtitle_streams if stream["language"]
-                    }
-                    if subtitle_language not in available_subtitle_languages:
-                        job_logger.warning(
-                            "requested subtitle language not found: %s (available=%s), job will continue without matching subtitle",
-                            subtitle_language,
-                            sorted(available_subtitle_languages),
-                        )
-                subtitle_export = _downgrade_bitmap_subtitles(
-                    subtitle_export, subtitle_language, video_export, subtitle_streams, job_logger
+                selected_subtitles, subtitle_warnings = _select_subtitle_streams(
+                    _probe_subtitle_streams(input_path), data.get("subtitle_stream_indexes"),
+                    subtitle_language, subtitle_export, video_export,
                 )
+                subtitle_stream_indexes = [stream["index"] for stream in selected_subtitles]
+                for warning in subtitle_warnings:
+                    _add_job_warning(job_id, warning, job_logger)
 
             duration_seconds = _probe_duration_seconds(input_path)
+            quality_crf = data.get("quality_crf")
+            quality_crf = int(quality_crf) if quality_crf is not None else None
             prefer_stream_copy_video = (
                 profile == "h264_mp4"
                 and video_export in {"mp4", "mkv"}
+                and quality_crf is None
+                and not data.get("target_video_bitrate")
+                and str(data.get("resolution") or "original") == "original"
                 and _probe_video_codec(input_path) == "h264"
             )
             hardware_request = str(data.get("hardware_acceleration") or "auto")
             hardware_encoder: str | None = None
-            if hardware_request != "disabled":
-                if profile == "h264_mp4" and "h264_v4l2m2m" in _hardware_encoders:
-                    hardware_encoder = "h264_v4l2m2m"
-                elif profile == "h265_mp4" and "hevc_v4l2m2m" in _hardware_encoders:
-                    hardware_encoder = "hevc_v4l2m2m"
+            requested_encoder = {"h264_mp4": "h264_v4l2m2m", "h265_mp4": "hevc_v4l2m2m"}.get(profile)
+            hardware_compatible = quality_crf is None or bool(data.get("target_video_bitrate"))
+            if hardware_request == "v4l2m2m":
+                if not hardware_compatible:
+                    raise ValueError("Explicit V4L2 encoding cannot honor CRF; select bitrate or software encoding")
+                if requested_encoder not in _hardware_encoders:
+                    raise ValueError(f"Explicit V4L2 encoding unavailable for {profile}; hardware encode probe failed")
+                prefer_stream_copy_video = False
+            if (hardware_request != "disabled" and hardware_compatible
+                    and requested_encoder in _hardware_encoders and not prefer_stream_copy_video):
+                hardware_encoder = requested_encoder
             current_record = job_repository.get(job_id)
             if current_record is not None:
                 current_record.hardware_acceleration_used = hardware_encoder
@@ -1153,13 +1232,6 @@ def process_job(job_id: str) -> None:
                     audio_stream_indexes = [int(x) for x in raw_audio_indexes]
                 except (TypeError, ValueError):
                     audio_stream_indexes = None
-            raw_subtitle_indexes = data.get("subtitle_stream_indexes")
-            subtitle_stream_indexes: list[int] | None = None
-            if isinstance(raw_subtitle_indexes, list) and raw_subtitle_indexes:
-                try:
-                    subtitle_stream_indexes = [int(x) for x in raw_subtitle_indexes]
-                except (TypeError, ValueError):
-                    subtitle_stream_indexes = None
             audio_channel_mode = str(data.get("audio_channel_mode") or "preserve")
             # Probe all streams once for multi-audio channel/codec info (fallback to per-probe if needed)
             audio_codec_map: dict[int, str | None] | None = None
@@ -1205,7 +1277,7 @@ def process_job(job_id: str) -> None:
                     subtitle_language,
                     prefer_stream_copy_video=prefer_stream_copy_video,
                     ffmpeg_threads=settings.ffmpeg_threads,
-                    quality_crf=int(data.get("quality_crf") or 23),
+                    quality_crf=quality_crf,
                     target_video_bitrate=data.get("target_video_bitrate"),
                     audio_bitrate_kbps=int(data.get("audio_bitrate_kbps") or 128),
                     resolution=str(data.get("resolution") or "original"),
@@ -1215,24 +1287,31 @@ def process_job(job_id: str) -> None:
                     audio_codec_map=audio_codec_map,
                     audio_channels_map=audio_channels_map,
                     audio_channel_mode=audio_channel_mode,
+                    subtitle_stream_indexes=subtitle_stream_indexes,
                 )
                 return_code, stderr_text = _run_ffmpeg_with_progress(
                     job_id, cmd, duration_seconds=duration_seconds
                 )
 
                 if (
-                    return_code != 0
-                    and prefer_stream_copy_video
+                    return_code not in {0, 130}
+                    and (prefer_stream_copy_video or (hardware_encoder and hardware_request == "auto"))
                     and not _is_cancel_requested(job_id)
                     and not _shutdown.is_shutting_down
                 ):
-                    job_logger.warning("stream copy failed, falling back to re-encode")
+                    fallback_reason = "Stream copy failed" if prefer_stream_copy_video else "Hardware encode failed"
+                    job_logger.warning("%s, falling back to software re-encode", fallback_reason)
+                    hardware_encoder = None
+                    current_record = job_repository.get(job_id)
+                    if current_record is not None:
+                        current_record.hardware_acceleration_used = None
+                        job_repository.persist(current_record)
                     job_repository.update_status(
                         job_id,
                         JobStatus.running,
                         progress_percent=0,
                         progress_phase="preparing",
-                        progress_message="Stream copy failed, retrying with re-encode",
+                        progress_message=f"{fallback_reason}, retrying with software re-encode",
                     )
                     fallback_cmd = _ffmpeg_command(
                         input_path,
@@ -1244,7 +1323,7 @@ def process_job(job_id: str) -> None:
                         subtitle_language,
                         prefer_stream_copy_video=False,
                         ffmpeg_threads=settings.ffmpeg_threads,
-                        quality_crf=int(data.get("quality_crf") or 23),
+                        quality_crf=quality_crf,
                         target_video_bitrate=data.get("target_video_bitrate"),
                         audio_bitrate_kbps=int(data.get("audio_bitrate_kbps") or 128),
                         resolution=str(data.get("resolution") or "original"),
@@ -1254,6 +1333,7 @@ def process_job(job_id: str) -> None:
                         audio_codec_map=audio_codec_map,
                         audio_channels_map=audio_channels_map,
                         audio_channel_mode=audio_channel_mode,
+                        subtitle_stream_indexes=subtitle_stream_indexes,
                     )
                     return_code, stderr_text = _run_ffmpeg_with_progress(
                         job_id, fallback_cmd, duration_seconds=duration_seconds
@@ -1280,136 +1360,54 @@ def process_job(job_id: str) -> None:
 
                 if return_code != 0:
                     stderr_tail = (stderr_text or "ffmpeg failed").strip()[-700:]
+                    if hardware_request == "v4l2m2m":
+                        stderr_tail = f"Explicit V4L2 encoding failed: {stderr_tail}"
                     raise RuntimeError(stderr_tail)
 
+                # Publish successful video before optional sidecars; their failure must not lose it.
+                _atomic_move(temp_output_path, output_path)
                 if subtitle_export == "separate_srt":
-                    # Multi-SRT extraction when subtitle_stream_indexes is provided
-                    # (legacy defaultdict(int) suffix logic: .{lang}.srt then .{lang}N.srt)
-                    if subtitle_stream_indexes:
-                        # Probe subtitle language info (use _probe_all_streams for full context)
-                        all_sub = _probe_all_streams(input_path)
-                        if all_sub is not None:
-                            sub_list = all_sub.get("subtitle", [])
-                        else:
-                            # Fallback: _probe_subtitle_streams does not return indexes, so treat as unknown -> "und"
-                            sub_list = []
-                        # Build index -> language map
-                        lang_by_index: dict[int, str | None] = {}
-                        for entry in sub_list:
-                            try:
-                                idx = int(entry.get("index"))  # type: ignore[arg-type]
-                            except (TypeError, ValueError):
-                                continue
-                            lang_by_index[idx] = entry.get("language")  # may be None
-
-                        lang_counts: dict[str, int] = defaultdict(int)
-                        for idx in subtitle_stream_indexes:
-                            try:
-                                idx_int = int(idx)
-                            except (TypeError, ValueError):
-                                continue
-                            lang_raw = lang_by_index.get(idx_int)
-                            lang = str(lang_raw).strip().lower() if lang_raw else "und"
-                            if not lang:
-                                lang = "und"
-                            count = lang_counts[lang]
-                            suffix = _srt_suffix_for_lang(lang, count)
-                            lang_counts[lang] += 1
-                            # Unique temp per index to prevent collisions
-                            temp_srt = settings.temp_dir / f"{job_id}-{idx_int}.srt"
-                            temp_srt.parent.mkdir(parents=True, exist_ok=True)
-                            subtitle_output_multi = (
-                                output_path.parent / f"{output_path.stem}{suffix}"
-                            )
-                            subtitle_cmd_multi = [
-                                "ffmpeg",
-                                "-y",
-                                "-i",
-                                str(input_path),
-                                "-map",
-                                f"0:{idx_int}",
-                                "-threads",
-                                str(settings.ffmpeg_threads),
-                                str(temp_srt),
-                            ]
-                            try:
-                                subtitle_proc = subprocess.run(
-                                    subtitle_cmd_multi,
-                                    capture_output=True,
-                                    text=True,
-                                    check=False,
-                                    timeout=1800,
-                                )
-                                if subtitle_proc.returncode == 0 and temp_srt.exists():
-                                    _atomic_move(temp_srt, subtitle_output_multi)
-                                else:
-                                    subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
-                                    job_logger.warning(
-                                        "separate_srt export skipped for index %s: %s",
-                                        idx_int,
-                                        subtitle_stderr or "subtitle stream not found",
-                                    )
-                                    temp_srt.unlink(missing_ok=True)
-                            except FileNotFoundError:
-                                job_logger.warning(
-                                    "separate_srt export skipped for index %s: ffmpeg executable not found",
-                                    idx_int,
-                                )
-                            except subprocess.TimeoutExpired:
-                                job_logger.warning(
-                                    "separate_srt export skipped for index %s: extraction timed out",
-                                    idx_int,
-                                )
-                                temp_srt.unlink(missing_ok=True)
-                    else:
-                        # Backward-compatible single SRT extraction (subtitle_language based)
-                        subtitle_output = output_path.parent / f"{output_path.stem}.srt"
+                    lang_counts: dict[str, int] = defaultdict(int)
+                    for stream in selected_subtitles:
+                        index = stream["index"]
+                        lang = stream.get("language") or "und"
+                        suffix = _srt_suffix_for_lang(lang, lang_counts[lang])
+                        lang_counts[lang] += 1
+                        if not data.get("subtitle_stream_indexes") and len(selected_subtitles) == 1:
+                            suffix = ".srt"
+                        temp_srt = settings.temp_dir / f"{job_id}-{index}.srt"
+                        subtitle_output = output_path.parent / f"{output_path.stem}{suffix}"
+                        threads = str(max(1, min(32, settings.ffmpeg_threads)))
                         subtitle_cmd = [
-                            "ffmpeg",
-                            "-y",
-                            "-i",
-                            str(input_path),
-                            "-map",
-                            (
-                                f"0:s:m:language:{subtitle_language}?"
-                                if subtitle_language
-                                else "0:s:0?"
-                            ),
-                            "-threads",
-                            str(settings.ffmpeg_threads),
-                            str(temp_subtitle_path),
+                            "ffmpeg", "-y", "-filter_threads", threads, "-filter_complex_threads", threads,
+                            "-threads", threads, "-i", str(input_path), "-map", f"0:{index}",
+                            "-c:s", "srt", "-threads", threads, str(temp_srt),
                         ]
                         try:
                             subtitle_proc = subprocess.run(
-                                subtitle_cmd,
-                                capture_output=True,
-                                text=True,
-                                check=False,
-                                timeout=1800,
+                                subtitle_cmd, capture_output=True, text=True, check=False, timeout=1800,
                             )
-                            if subtitle_proc.returncode == 0 and temp_subtitle_path.exists():
-                                _atomic_move(temp_subtitle_path, subtitle_output)
-                            else:
-                                subtitle_stderr = (subtitle_proc.stderr or "").strip()[-400:]
-                                job_logger.warning(
-                                    "separate_srt export skipped: %s",
-                                    subtitle_stderr or "subtitle stream not found",
-                                )
-                        except FileNotFoundError:
-                            job_logger.warning(
-                                "separate_srt export skipped: ffmpeg executable not found"
-                            )
-                        except subprocess.TimeoutExpired:
-                            job_logger.warning("separate_srt export skipped: extraction timed out")
+                            if subtitle_proc.returncode != 0 or not temp_srt.exists() or temp_srt.stat().st_size == 0:
+                                detail = (subtitle_proc.stderr or "SRT file missing or empty").strip()[-400:]
+                                raise RuntimeError(detail)
+                            _atomic_move(temp_srt, subtitle_output)
+                        except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
+                            _add_job_warning(job_id, f"SRT export failed for subtitle index {index}: {exc}", job_logger)
+                        finally:
+                            try:
+                                temp_srt.unlink(missing_ok=True)
+                            except OSError as exc:
+                                _add_job_warning(job_id, f"SRT temporary file cleanup failed for index {index}: {exc}", job_logger)
 
-                _atomic_move(temp_output_path, output_path)
+                current_record = job_repository.get(job_id)
+                has_warnings = bool(current_record and current_record.warnings)
 
                 job_repository.update_status(
                     job_id,
                     JobStatus.completed,
                     progress_percent=100,
                     progress_phase="completed",
-                    progress_message="Conversion completed",
+                    progress_message="Conversion completed with warnings" if has_warnings else "Conversion completed",
                     output_filename=output_path.name,
                 )
                 job_logger.info("status set to completed")
@@ -1417,7 +1415,6 @@ def process_job(job_id: str) -> None:
                 # On success the temp files were moved away; on failure,
                 # cancel, or shutdown this removes the partial output.
                 temp_output_path.unlink(missing_ok=True)
-                temp_subtitle_path.unlink(missing_ok=True)
                 # Cleanup any remaining multi-SRT per-index temps
                 try:
                     for _p in settings.temp_dir.glob(f"{job_id}-*.srt"):
@@ -1429,19 +1426,20 @@ def process_job(job_id: str) -> None:
                     pass
         except Exception as exc:  # noqa: BLE001
             current = job_repository.get(job_id)
-            retry_settings = _runtime_settings().get("retry", {})
-            retry_enabled = bool(retry_settings.get("enabled", True))
-            max_attempts = int(
-                (current.max_attempts if current else 3) or retry_settings.get("max_attempts", 3)
-            )
+            raw_retry = _runtime_settings().get("retry")
+            try:
+                retry_settings = RetrySettings.model_validate(raw_retry if isinstance(raw_retry, dict) else {})
+            except ValueError:
+                retry_settings = RetrySettings()
+            max_attempts = current.max_attempts if current else retry_settings.max_attempts
             if (
                 current is not None
-                and retry_enabled
+                and retry_settings.enabled
                 and current.attempt_count < max_attempts
                 and _is_transient_failure(str(exc))
             ):
-                initial = max(1, int(retry_settings.get("initial_backoff_seconds", 10)))
-                maximum = max(initial, int(retry_settings.get("max_backoff_seconds", 300)))
+                initial = retry_settings.initial_backoff_seconds
+                maximum = max(initial, retry_settings.max_backoff_seconds)
                 delay = min(maximum, initial * (2 ** max(0, current.attempt_count - 1)))
                 job_repository.schedule_retry(current, delay_seconds=delay, reason=str(exc))
                 job_logger.warning("transient failure; retry scheduled in %ss", delay)
@@ -1464,17 +1462,18 @@ def process_job(job_id: str) -> None:
 
 
 def _get_dynamic_concurrency() -> int:
+    ceiling = max(1, min(8, settings.worker_concurrency))
     try:
         raw = storage_client.get("system:settings")
         if raw:
             data = json.loads(raw)
             return max(
                 1,
-                min(8, int(data.get("worker_concurrency", settings.worker_concurrency))),
+                min(ceiling, int(data.get("worker_concurrency", ceiling))),
             )
     except Exception:
         pass
-    return max(1, min(8, settings.worker_concurrency))
+    return ceiling
 
 
 def _requeue_after_shutdown(record: Any, message: str) -> None:
@@ -1565,20 +1564,19 @@ def _cleanup_outputs(
 
 
 def _probe_hardware_encoders() -> list[str]:
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
     supported = []
-    device_available = any(Path("/dev").glob("video*"))
     for encoder in ("h264_v4l2m2m", "hevc_v4l2m2m"):
-        if device_available and encoder in result.stdout:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-v", "error", "-nostdin",
+                 "-f", "lavfi", "-i", "color=size=128x128:rate=5", "-frames:v", "2",
+                 "-an", "-pix_fmt", "yuv420p", "-c:v", encoder, "-b:v", "1M",
+                 "-threads", "1", "-f", "null", "-"],
+                capture_output=True, text=True, check=False, timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
             supported.append(encoder)
     return supported
 
@@ -1588,6 +1586,7 @@ _hardware_encoders = _probe_hardware_encoders()
 
 def _run_concurrent(max_pool_size: int) -> None:
     """Run the worker loop with concurrent job processing via a thread pool."""
+    max_pool_size = min(max(1, max_pool_size), max(1, min(8, settings.worker_concurrency)))
     active_futures: dict[Future[None], str] = {}
     last_recovery = time.monotonic()
     last_cleanup = 0.0
@@ -1604,6 +1603,8 @@ def _run_concurrent(max_pool_size: int) -> None:
                             "timestamp": time.time(),
                             "hardware_encoders": _hardware_encoders,
                             "active_jobs": len(active_futures),
+                            "worker_concurrency_limit": max(1, min(8, settings.worker_concurrency)),
+                            "effective_worker_concurrency": _get_dynamic_concurrency(),
                         }
                     ),
                     ex=30,
@@ -1652,6 +1653,14 @@ def _run_concurrent(max_pool_size: int) -> None:
             try:
                 job_id = job_repository.dequeue(timeout=5)
                 if not job_id:
+                    continue
+                # Settings can change while dequeue blocks; do not start above new limit.
+                if _shutdown.is_shutting_down or len(active_futures) >= _get_dynamic_concurrency():
+                    current = job_repository.get(job_id)
+                    if current is not None:
+                        job_repository.requeue_existing(current)
+                    else:
+                        job_repository.acknowledge(job_id)
                     continue
 
                 future = executor.submit(process_job, job_id)
@@ -1713,8 +1722,8 @@ def run() -> None:
                 "recovered %s interrupted/stale jobs", len(recovered), extra={"job_id": "-"}
             )
 
-    # We use a fixed upper bound pool size so threads can scale up to this limit dynamically.
-    pool_size = max(8, concurrency)
+    # Environment is hard ceiling; persisted settings may only reduce dispatch.
+    pool_size = max(1, min(8, concurrency))
     _run_concurrent(pool_size)
 
     # Post-loop cleanup: safety net to catch any jobs still marked as running

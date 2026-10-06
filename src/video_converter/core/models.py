@@ -34,6 +34,11 @@ class AudioExport(StrEnum):
     opus = "opus"
 
 
+def validate_audio_container(video: VideoExport, audio: AudioExport) -> None:
+    if video == VideoExport.webm and audio not in {AudioExport.copy, AudioExport.opus}:
+        raise ValueError("WebM supports Opus audio or copy with an Opus fallback; choose Opus, MP4 or MKV")
+
+
 class SubtitleExport(StrEnum):
     none = "none"
     embedded = "embedded"
@@ -70,7 +75,7 @@ class JobCreateRequest(BaseModel):
     audio_export: AudioExport = AudioExport.copy
     subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)
-    quality_crf: int = Field(default=23, ge=0, le=51)
+    quality_crf: Optional[int] = Field(default=None, ge=0, le=51)
     target_video_bitrate: Optional[str] = Field(
         default=None, pattern=r"^\d+(?:[kKmM])?$", max_length=16
     )
@@ -84,6 +89,11 @@ class JobCreateRequest(BaseModel):
     subtitle_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
     audio_channel_mode: Optional[str] = Field(default="preserve", pattern=r"^(preserve|downmix2)$")
     skip_existing_output: bool = False
+
+    @model_validator(mode="after")
+    def _validate_audio_container(self) -> "JobCreateRequest":
+        validate_audio_container(self.video_export, self.audio_export)
+        return self
 
 
 class JobBatchCreateRequest(BaseModel):
@@ -121,6 +131,7 @@ class JobRecord(BaseModel):
     progress_out_time_seconds: Optional[float] = Field(default=None, ge=0)
     log_tail: list[str] = Field(default_factory=list, max_length=50)
     timeline: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     archived: bool = False
     cancel_requested: bool = False
     created_at: str
@@ -132,7 +143,7 @@ class JobRecord(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=10)
     next_retry_at: Optional[str] = None
     retry_reason: Optional[str] = Field(default=None, max_length=1000)
-    quality_crf: int = Field(default=23, ge=0, le=51)
+    quality_crf: Optional[int] = Field(default=None, ge=0, le=51)
     target_video_bitrate: Optional[str] = Field(default=None, max_length=16)
     audio_bitrate_kbps: int = Field(default=128, ge=32, le=512)
     resolution: VideoResolution = VideoResolution.original
@@ -246,6 +257,8 @@ class WorkerHealthResponse(BaseModel):
     disk_free_bytes: int = Field(default=0, ge=0)
     disk_used_percent: float = Field(default=0, ge=0, le=100)
     hardware_encoders: list[str] = Field(default_factory=list)
+    worker_concurrency_limit: int = Field(default=1, ge=1, le=8)
+    effective_worker_concurrency: int = Field(default=1, ge=1, le=8)
 
 
 class JobIdsRequest(BaseModel):
@@ -380,9 +393,15 @@ class DefaultExportSettings(BaseModel):
             return normalized or None
         return value
 
+    @model_validator(mode="after")
+    def _validate_audio_container(self) -> "DefaultExportSettings":
+        validate_audio_container(self.video_export, self.audio_export)
+        return self
+
 
 class SystemSettings(BaseModel):
     worker_concurrency: int = Field(default=1, ge=1, le=8)
+    worker_concurrency_limit: int = Field(default=1, ge=1, le=8, json_schema_extra={"readOnly": True})
     default_export: DefaultExportSettings = Field(default_factory=DefaultExportSettings)
     auto_cleanup: AutoCleanupSettings = Field(default_factory=AutoCleanupSettings)
     retry: Optional[RetrySettings] = None
@@ -404,8 +423,9 @@ class Mp4FixRequest(BaseModel):
 class Mp4FixResponse(BaseModel):
     status: str = "fixed"
     filename: str
+    download_url: str
     source_path: Optional[str] = None
-    message: str = "MP4 fixed (faststart + genpts)"
+    message: str = "Repaired MP4 copy created (faststart + genpts); source unchanged"
 
 
 class AuditEventDto(BaseModel):

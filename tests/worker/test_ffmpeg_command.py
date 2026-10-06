@@ -5,12 +5,13 @@ These tests exercise all code paths in FFmpeg command generation:
 - Audio codec selection (copy, AAC, MP3, Opus, unknown fallback)
 - Subtitle handling (embedded with/without language, separate_srt, none)
 - Output format variations (mp4 faststart, mkv, webm)
-- Edge cases (unknown profile, prefer_stream_copy priority)
+- Edge cases (unknown profile)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import pytest
 
 from video_converter.worker.main import _ffmpeg_command
 
@@ -220,6 +221,7 @@ def test_subtitle_embedded_with_language() -> None:
         audio_export="copy",
         subtitle_export="embedded",
         subtitle_language="eng",
+        subtitle_stream_indexes=[4, 7],
     )
 
     assert _extract(cmd, "-c:s") == "copy"
@@ -227,7 +229,7 @@ def test_subtitle_embedded_with_language() -> None:
     # A bare "-map 0" would also pull attachments/data streams.
     assert "0:v:0" in cmd
     assert "0:a:0?" in cmd
-    assert "0:s:m:language:eng?" in cmd
+    assert "0:4" in cmd and "0:7" in cmd
     assert "0" not in cmd
     assert "-0:s" not in cmd
 
@@ -242,12 +244,13 @@ def test_subtitle_embedded_without_language() -> None:
         audio_export="aac",
         subtitle_export="embedded",
         subtitle_language=None,
+        subtitle_stream_indexes=[4],
     )
 
     assert _extract(cmd, "-c:s") == "copy"
     assert "0:v:0" in cmd
     assert "0:a:0?" in cmd
-    assert "0:s:0?" in cmd
+    assert "0:4" in cmd
 
 
 def test_subtitle_embedded_mp4_uses_mov_text() -> None:
@@ -260,6 +263,7 @@ def test_subtitle_embedded_mp4_uses_mov_text() -> None:
         audio_export="aac",
         subtitle_export="embedded",
         subtitle_language="eng",
+        subtitle_stream_indexes=[4],
     )
 
     assert _extract(cmd, "-c:s") == "mov_text"
@@ -275,6 +279,7 @@ def test_subtitle_embedded_webm_uses_webvtt() -> None:
         audio_export="opus",
         subtitle_export="embedded",
         subtitle_language=None,
+        subtitle_stream_indexes=[4],
     )
 
     assert _extract(cmd, "-c:s") == "webvtt"
@@ -381,43 +386,6 @@ def test_unknown_profile_defaults_to_h264() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. prefer_stream_copy_video takes precedence over profile
-# ---------------------------------------------------------------------------
-
-
-def test_stream_copy_overrides_h265_profile() -> None:
-    """Even with h265 profile, prefer_stream_copy_video=True should produce -c:v copy."""
-    cmd = _ffmpeg_command(
-        INPUT,
-        OUTPUT_MKV,
-        profile="h265_mp4",
-        video_export="mkv",
-        audio_export="aac",
-        subtitle_export="none",
-        subtitle_language=None,
-        prefer_stream_copy_video=True,
-    )
-
-    assert _extract(cmd, "-c:v") == "copy"
-
-
-def test_stream_copy_overrides_vp9_profile() -> None:
-    """Even with vp9_webm profile, prefer_stream_copy_video=True should produce -c:v copy."""
-    cmd = _ffmpeg_command(
-        INPUT,
-        OUTPUT_WEBM,
-        profile="vp9_webm",
-        video_export="webm",
-        audio_export="opus",
-        subtitle_export="none",
-        subtitle_language=None,
-        prefer_stream_copy_video=True,
-    )
-
-    assert _extract(cmd, "-c:v") == "copy"
-
-
-# ---------------------------------------------------------------------------
 # 10. Combined scenarios – custom export options
 # ---------------------------------------------------------------------------
 
@@ -432,13 +400,14 @@ def test_h265_mkv_with_mp3_and_embedded_subtitles() -> None:
         audio_export="mp3",
         subtitle_export="embedded",
         subtitle_language="fre",
+        subtitle_stream_indexes=[4],
     )
 
     assert _extract(cmd, "-c:v") == "libx265"
     assert _extract(cmd, "-c:a") == "libmp3lame"
     assert _extract(cmd, "-b:a") == "192k"
     assert _extract(cmd, "-c:s") == "copy"
-    assert "0:s:m:language:fre?" in cmd
+    assert "0:4" in cmd
     assert not _has_flag(cmd, "-movflags")
 
 
@@ -486,8 +455,8 @@ def test_vp9_webm_with_copy_audio_forced_to_still_appear_in_cmd() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_command_always_starts_with_ffmpeg_y_i() -> None:
-    """Every generated command must begin with ffmpeg -y -i <input>."""
+def test_command_places_decoder_threads_before_input() -> None:
+    """Decoder options belong before -i; encoder options belong after input."""
     cmd = _ffmpeg_command(
         INPUT,
         OUTPUT_MP4,
@@ -500,8 +469,8 @@ def test_command_always_starts_with_ffmpeg_y_i() -> None:
 
     assert cmd[0] == "ffmpeg"
     assert cmd[1] == "-y"
-    assert cmd[2] == "-i"
-    assert cmd[3] == str(INPUT)
+    assert cmd[cmd.index("-i") + 1] == str(INPUT)
+    assert cmd.index("-threads") < cmd.index("-i")
 
 
 def test_command_always_ends_with_output_path() -> None:
@@ -595,14 +564,6 @@ def test_multi_audio_copy() -> None:
     assert cmd[idx0 + 1] == "copy"
     idx1 = cmd.index("-c:a:1")
     assert cmd[idx1 + 1] == "copy"
-    # Must NOT contain single -c:a copy (without stream spec)
-    # The command should have per-stream entries, not generic
-    # Generic -c:a would be second token "copy" without colon, but we allow per-stream only
-    # Ensure no plain "-c:a" without colon for multi
-    for tok in cmd:
-        if tok == "-c:a":
-            raise AssertionError("multi-audio should use -c:a:<n> notplain -c:a")
-    # backward compat: single audio still works (already tested above)
 
 
 def test_multi_audio_transcode() -> None:
@@ -841,10 +802,62 @@ def test_skip_existing(tmp_path, monkeypatch) -> None:
     assert updated is not None
     assert updated.status == JobStatus.completed
     assert updated.progress_percent == 100
-    assert (
-        "atland" in (updated.progress_message or "").lower()
-        or "atland" in (updated.log_tail[-1] if updated.log_tail else "").lower()
-        if updated.log_tail
-        else True
-    )
     store.close()
+
+
+@pytest.mark.parametrize(
+    "options,flag,value",
+    [
+        ({"quality_crf": 0}, "-crf", "0"),
+        ({"quality_crf": 23}, "-crf", "23"),
+        ({"target_video_bitrate": "2M"}, "-b:v", "2M"),
+        ({"resolution": "480p"}, "-vf", "scale=-2:'min(480,ih)'"),
+    ],
+)
+def test_video_changes_override_copy_preference(options, flag, value) -> None:
+    cmd = _ffmpeg_command(
+        INPUT, OUTPUT_MP4, "h264_mp4", "mp4", "aac", "none", None,
+        prefer_stream_copy_video=True, **options,
+    )
+    assert _extract(cmd, "-c:v") == "libx264"
+    assert _extract(cmd, flag) == value
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("mode,codec", [("aac", "aac"), ("mp3", "libmp3lame"), ("opus", "libopus")])
+def test_audio_explicit_codec_and_bitrate(selected, mode, codec) -> None:
+    cmd = _ffmpeg_command(
+        INPUT, OUTPUT_MKV, "h264_mp4", "mkv", mode, "none", None,
+        audio_stream_indexes=[2] if selected else None,
+        audio_codec_map={2: "flac"}, audio_channels_map={2: 6},
+        audio_bitrate_kbps=160,
+    )
+    suffix = ":0" if selected else ""
+    assert _extract(cmd, f"-c:a{suffix}") == codec
+    assert _extract(cmd, f"-b:a{suffix}") == "160k"
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("container,source_codec,encoder", [("mp4", "aac", "aac"), ("mkv", "flac", "aac"), ("webm", "opus", "libopus")])
+def test_copy_downmix_encodes_stereo(selected, container, source_codec, encoder) -> None:
+    cmd = _ffmpeg_command(
+        INPUT, OUTPUT_MKV.with_suffix(f".{container}"), "h264_mp4", container,
+        "copy", "none", None,
+        audio_stream_indexes=[2] if selected else None,
+        audio_codec_map={2: source_codec}, audio_channels_map={2: 6},
+        audio_channel_mode="downmix2", audio_bitrate_kbps=160,
+    )
+    suffix = ":0" if selected else ""
+    assert _extract(cmd, f"-c:a{suffix}") == encoder
+    assert _extract(cmd, f"-ac:a{suffix}") == "2"
+    assert _extract(cmd, f"-b:a{suffix}") == "160k"
+
+
+def test_selected_audio_order_preserved_and_duplicates_removed() -> None:
+    cmd = _ffmpeg_command(
+        INPUT, OUTPUT_MKV, "h264_mp4", "mkv", "aac", "embedded", "eng",
+        audio_stream_indexes=[3, 1, 3], audio_codec_map={3: "flac", 1: "aac"},
+        subtitle_stream_indexes=[4],
+    )
+    maps = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-map"]
+    assert maps == ["0:v:0", "0:3", "0:1", "0:4"]

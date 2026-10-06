@@ -215,6 +215,14 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
             </div>
           </div>
         )}
+        {!!job.warnings?.length && (
+          <div className="detail-section">
+            <span className="detail-section-title">{t('job.warnings')}</span>
+            <ul className="settings-help" style={{ overflowWrap: 'anywhere' }}>
+              {job.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+            </ul>
+          </div>
+        )}
 
         <div className="detail-section">
           <span className="detail-section-title">{t('job.overview')}</span>
@@ -788,6 +796,9 @@ export function JobList({
                 </td>
                 <td className="job-status-cell">
                   <StatusBadge status={job.status} />
+                  {!!job.warnings?.length && (
+                    <span className="text-xs" title={job.warnings.join('\n')}>{t('job.warnings')} ({job.warnings.length})</span>
+                  )}
                 </td>
                 <td
                   className="job-action-cell"

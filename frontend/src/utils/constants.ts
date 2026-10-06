@@ -26,7 +26,11 @@ export type LocalPreset = {
 };
 
 export const videoOptions: VideoExport[] = ['mp4', 'mkv', 'webm'];
-export const audioOptions: AudioExport[] = ['copy', 'aac', 'mp3', 'opus'];
+export const audioOptions: Record<VideoExport, AudioExport[]> = {
+  mp4: ['copy', 'aac', 'mp3', 'opus'],
+  mkv: ['copy', 'aac', 'mp3', 'opus'],
+  webm: ['copy', 'opus'],
+};
 export const subtitleOptions: SubtitleExport[] = ['none', 'embedded', 'separate_srt'];
 
 export const defaultSettings: ExportSettings = {

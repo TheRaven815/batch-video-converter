@@ -11,12 +11,13 @@ from inspect import isawaitable
 from types import ModuleType
 
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from video_converter.api import auth, routes
 from video_converter.api.async_storage import AsyncJobRepository, create_async_storage_client
-from video_converter.api.errors import structured_http_exception_handler
+from video_converter.api.errors import structured_http_exception_handler, structured_validation_exception_handler
 from video_converter.api.routers import audit, batches, health, jobs, media, outputs, tools, ui
 from video_converter.api.routers import settings as settings_router
 from video_converter.core.config import ensure_runtime_dirs, get_settings
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     application = FastAPI(title="Video Converter API", version="0.1.0", lifespan=lifespan)
     application.add_exception_handler(HTTPException, structured_http_exception_handler)
     application.add_exception_handler(StorageError, storage_error_handler)
+    application.add_exception_handler(RequestValidationError, structured_validation_exception_handler)
     application.include_router(auth.router, prefix="/api/v1")
     for route_group in (
         health.router,

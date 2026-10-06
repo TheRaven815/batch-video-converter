@@ -842,6 +842,8 @@ async def worker_health() -> WorkerHealthResponse:
 
     heartbeat_age: float | None = None
     hardware_encoders: list[str] = []
+    concurrency_limit = max(1, min(8, settings.worker_concurrency))
+    effective_concurrency = concurrency_limit
     try:
         raw_heartbeat = await _maybe_await(storage_client.get(WORKER_HEARTBEAT_KEY))
         heartbeat = json.loads(str(raw_heartbeat)) if raw_heartbeat else {}
@@ -850,6 +852,8 @@ async def worker_health() -> WorkerHealthResponse:
         hardware_encoders = [
             str(value) for value in heartbeat.get("hardware_encoders", []) if value
         ]
+        concurrency_limit = max(1, min(8, int(heartbeat.get("worker_concurrency_limit", concurrency_limit))))
+        effective_concurrency = max(1, min(concurrency_limit, int(heartbeat.get("effective_worker_concurrency", concurrency_limit))))
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
     worker_online = heartbeat_age is not None and heartbeat_age < 30
@@ -868,6 +872,8 @@ async def worker_health() -> WorkerHealthResponse:
         disk_free_bytes=disk.free,
         disk_used_percent=(disk.used / disk.total * 100) if disk.total else 0,
         hardware_encoders=hardware_encoders,
+        worker_concurrency_limit=concurrency_limit,
+        effective_worker_concurrency=effective_concurrency,
     )
 
 
@@ -1154,12 +1160,15 @@ async def clear_outputs() -> dict[str, int]:
 
 
 def _default_system_settings() -> SystemSettings:
-    return SystemSettings(worker_concurrency=settings.worker_concurrency)
+    limit = max(1, min(8, settings.worker_concurrency))
+    return SystemSettings(worker_concurrency=limit, worker_concurrency_limit=limit)
 
 
 def _system_settings_response(value: SystemSettings) -> JSONResponse:
     """Keep legacy response shape while retaining a precise OpenAPI schema."""
     data = value.model_dump(mode="json")
+    data["worker_concurrency_limit"] = max(1, min(8, settings.worker_concurrency))
+    data["worker_concurrency"] = min(data["worker_concurrency"], data["worker_concurrency_limit"])
     for key in ("retry", "disk_safety"):
         if data.get(key) is None:
             data.pop(key, None)
@@ -1185,6 +1194,8 @@ async def _load_system_settings() -> SystemSettings:
     if raw:
         try:
             stored = SystemSettings.model_validate_json(raw)
+            stored.worker_concurrency = min(stored.worker_concurrency, defaults.worker_concurrency_limit)
+            stored.worker_concurrency_limit = defaults.worker_concurrency_limit
             return SystemSettings.model_validate(
                 defaults.model_dump() | stored.model_dump(exclude_unset=True)
             )
@@ -1209,9 +1220,13 @@ async def get_system_settings() -> JSONResponse:
     dependencies=[Depends(get_current_user)],
 )
 async def update_system_settings(payload: SystemSettings) -> JSONResponse:
+    limit = max(1, min(8, settings.worker_concurrency))
+    if payload.worker_concurrency > limit:
+        raise HTTPException(status_code=422, detail=f"worker_concurrency cannot exceed WORKER_CONCURRENCY={limit}")
     merged = SystemSettings.model_validate(
         _default_system_settings().model_dump() | payload.model_dump(exclude_unset=True)
     )
+    merged.worker_concurrency_limit = limit
     await _maybe_await(storage_client.set("system:settings", merged.model_dump_json()))
     return _system_settings_response(merged)
 

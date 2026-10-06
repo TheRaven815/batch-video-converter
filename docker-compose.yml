@@ -16,6 +16,9 @@ services:
       FFMPEG_STALL_TIMEOUT_SECONDS: ${FFMPEG_STALL_TIMEOUT_SECONDS:-300}
       MIN_FREE_DISK_BYTES: ${MIN_FREE_DISK_BYTES:-536870912}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10737418240}
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:-}
     ports:
       - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-8765}:8765"
     volumes:
@@ -36,10 +39,6 @@ services:
         source: ${MEDIA_DOWNLOADS_SOURCE:-./media/downloads}
         target: /media/downloads
         read_only: true
-    devices:
-      # Set V4L2_DEVICE=/dev/video11 on Raspberry Pi 4. The /dev/null default
-      # keeps the same Compose file portable; Pi 5 uses software encoding.
-      - ${V4L2_DEVICE:-/dev/null}:/dev/video11
     depends_on:
       redis:
         condition: service_healthy

@@ -105,12 +105,13 @@ def test_mp4_audio_copy_falls_back_for_incompatible_codec() -> None:
 def test_dynamic_concurrency_is_clamped(monkeypatch) -> None:
     from video_converter.worker import main as worker
 
+    monkeypatch.setattr(worker, "settings", worker.settings.model_copy(update={"worker_concurrency": 2}))
     monkeypatch.setattr(
         worker.storage_client,
         "get",
         lambda _key: '{"worker_concurrency": 999}',
     )
-    assert _get_dynamic_concurrency() == 8
+    assert _get_dynamic_concurrency() == 2
 
     monkeypatch.setattr(
         worker.storage_client,

@@ -11,6 +11,8 @@ import type {
   MediaBrowseResponse,
   MediaRootDto,
   MediaSubtitleProbeResponse,
+  Mp4FixRequest,
+  Mp4FixResponse,
   OutputListResponse,
   StructuredErrorResponse,
   WorkerHealthResponse,
@@ -352,13 +354,10 @@ export async function updateCredentials(
   });
 }
 
-export async function fixMp4(payload: {
-  source_root_key?: string | null;
-  source_path?: string | null;
-  input_filename?: string | null;
-}): Promise<{ status: string; filename: string; message: string }> {
-  return request<{ status: string; filename: string; message: string }>('/api/v1/tools/mp4-fix', {
+export async function fixMp4(payload: Mp4FixRequest, signal?: AbortSignal): Promise<Mp4FixResponse> {
+  return request<Mp4FixResponse>('/api/v1/tools/mp4-fix', {
     method: 'POST',
+    signal,
     body: JSON.stringify(payload),
   });
 }

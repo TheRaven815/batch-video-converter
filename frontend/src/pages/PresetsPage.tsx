@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import { useAppContext } from '../context/AppContext';
 import { useI18n } from '../i18n';
 import type { ExportSettings } from '../models';
+import { audioOptions } from '../utils/constants';
 
 export default function PresetsPage() {
   const app = useAppContext();
@@ -15,12 +16,9 @@ export default function PresetsPage() {
       ['mkv', 'MKV (H.265)'],
       ['webm', 'WebM (VP9)'],
     ],
-    audio_export: [
-      ['copy', t('convert.copyOriginal')],
-      ['aac', 'AAC'],
-      ['mp3', 'MP3'],
-      ['opus', 'Opus'],
-    ],
+    audio_export: audioOptions[app.presetSettings.video_export].map((option) => [
+      option, option === 'copy' ? t('convert.copyOriginal') : option.toUpperCase(),
+    ] as const),
     subtitle_export: [
       ['none', t('common.none')],
       ['embedded', t('convert.embedded')],
@@ -74,6 +72,9 @@ export default function PresetsPage() {
               }))
             }
           />
+          {!audioOptions[app.presetSettings.video_export].includes(app.presetSettings.audio_export) && (
+            <p className="form-alert-error" role="alert">{t('convert.incompatibleAudio')}</p>
+          )}
           <PresetSelect
             label={t('convert.subtitles')}
             value={app.presetSettings.subtitle_export}
@@ -99,7 +100,7 @@ export default function PresetsPage() {
           </button>
           <button
             className="btn btn-primary"
-            disabled={!app.presetName.trim()}
+            disabled={!app.presetName.trim() || !audioOptions[app.presetSettings.video_export].includes(app.presetSettings.audio_export)}
             onClick={() => {
               app.savePreset();
               app.showToast(
@@ -201,6 +202,9 @@ function PresetSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
+        {!options.some(([optionValue]) => optionValue === value) && (
+          <option value={value} disabled>{value.toUpperCase()}</option>
+        )}
         {options.map(([optionValue, text]) => (
           <option value={optionValue} key={optionValue}>
             {text}

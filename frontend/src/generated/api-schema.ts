@@ -887,11 +887,8 @@ export interface components {
             subtitle_export: components["schemas"]["SubtitleExport"];
             /** Subtitle Language */
             subtitle_language?: string | null;
-            /**
-             * Quality Crf
-             * @default 23
-             */
-            quality_crf: number;
+            /** Quality Crf */
+            quality_crf?: number | null;
             /** Target Video Bitrate */
             target_video_bitrate?: string | null;
             /**
@@ -989,6 +986,8 @@ export interface components {
             timeline?: {
                 [key: string]: unknown;
             }[];
+            /** Warnings */
+            warnings?: string[];
             /**
              * Archived
              * @default false
@@ -1023,11 +1022,8 @@ export interface components {
             next_retry_at?: string | null;
             /** Retry Reason */
             retry_reason?: string | null;
-            /**
-             * Quality Crf
-             * @default 23
-             */
-            quality_crf: number;
+            /** Quality Crf */
+            quality_crf?: number | null;
             /** Target Video Bitrate */
             target_video_bitrate?: string | null;
             /**
@@ -1200,11 +1196,13 @@ export interface components {
             status: string;
             /** Filename */
             filename: string;
+            /** Download Url */
+            download_url: string;
             /** Source Path */
             source_path?: string | null;
             /**
              * Message
-             * @default MP4 fixed (faststart + genpts)
+             * @default Repaired MP4 copy created (faststart + genpts); source unchanged
              */
             message: string;
         };
@@ -1288,6 +1286,11 @@ export interface components {
              * @default 1
              */
             worker_concurrency: number;
+            /**
+             * Worker Concurrency Limit
+             * @default 1
+             */
+            readonly worker_concurrency_limit: number;
             default_export?: components["schemas"]["DefaultExportSettings"];
             auto_cleanup?: components["schemas"]["AutoCleanupSettings"];
             retry?: components["schemas"]["RetrySettings"] | null;
@@ -1383,6 +1386,16 @@ export interface components {
             disk_used_percent: number;
             /** Hardware Encoders */
             hardware_encoders?: string[];
+            /**
+             * Worker Concurrency Limit
+             * @default 1
+             */
+            worker_concurrency_limit: number;
+            /**
+             * Effective Worker Concurrency
+             * @default 1
+             */
+            effective_worker_concurrency: number;
         };
     };
     responses: never;

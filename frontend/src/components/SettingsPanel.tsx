@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 
 const defaultSystemSettings: SystemSettings = {
   worker_concurrency: 1,
+  worker_concurrency_limit: 1,
   default_export: {
     profile: 'h264_mp4',
     video_export: defaultSettings.video_export,
@@ -138,7 +139,7 @@ export function SettingsPanel({
             <span className="form-section-title">{t('settings.conversionPreferences')}</span>
             <p className="settings-help">{t('settings.preferencesHelp')}</p>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={settingsLoading}>
+          <button type="submit" className="btn btn-primary" disabled={settingsLoading || !audioOptions[systemSettings.default_export.video_export].includes(systemSettings.default_export.audio_export)}>
             {settingsLoading ? t('settings.wait') : t('settings.save')}
           </button>
         </div>
@@ -176,13 +177,14 @@ export function SettingsPanel({
                   }
                   disabled={settingsLoading}
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((num) => (
+                  {Array.from({ length: systemSettings.worker_concurrency_limit }, (_, index) => index + 1).map((num) => (
                     <option key={num} value={num}>
                       {t('settings.jobsAtTime', { count: num })}
                     </option>
                   ))}
                 </select>
                 <p className="settings-help">{t('settings.concurrencyHelp')}</p>
+                <p className="settings-help">{t('settings.concurrencyLimit', { count: systemSettings.worker_concurrency_limit })}</p>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-profile">
@@ -263,12 +265,18 @@ export function SettingsPanel({
                   }
                   disabled={settingsLoading}
                 >
-                  {audioOptions.map((option) => (
+                  {!audioOptions[systemSettings.default_export.video_export].includes(systemSettings.default_export.audio_export) && (
+                    <option value={systemSettings.default_export.audio_export} disabled>{systemSettings.default_export.audio_export.toUpperCase()}</option>
+                  )}
+                  {audioOptions[systemSettings.default_export.video_export].map((option) => (
                     <option key={option} value={option}>
                       {option === 'copy' ? t('convert.copyOriginal') : option.toUpperCase()}
                     </option>
                   ))}
                 </select>
+                {!audioOptions[systemSettings.default_export.video_export].includes(systemSettings.default_export.audio_export) && (
+                  <p className="form-alert-error" role="alert">{t('convert.incompatibleAudio')}</p>
+                )}
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-subtitle-mode">

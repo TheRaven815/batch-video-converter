@@ -47,6 +47,8 @@ export type MediaStreamsProbeResponse = Schemas['MediaStreamsProbeResponse'];
 export type OutputFileDto = Schemas['OutputFileDto'];
 export type OutputListResponse = Schemas['OutputListResponse'];
 export type UploadResponse = Schemas['UploadResponse'];
+export type Mp4FixRequest = Schemas['Mp4FixRequest'];
+export type Mp4FixResponse = Schemas['Mp4FixResponse'];
 export type AuditEventDto = Schemas['AuditEventDto'];
 
 type ApiJobRecord = Schemas['JobRecord'];

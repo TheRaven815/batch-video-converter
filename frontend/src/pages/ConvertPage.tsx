@@ -1,12 +1,15 @@
-import { Fragment, useMemo, useState } from 'react';
-import { FileVideo, Folder, Play, Search, Trash2, Upload, Wrench } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Download, FileVideo, Folder, Play, Search, Trash2, Upload, Wrench } from 'lucide-react';
 import { useLocation } from 'wouter';
 
-import { fixMp4, probeSubtitles, uploadMedia } from '../api';
+import { downloadOutput, fixMp4, probeSubtitles, uploadMedia } from '../api';
 import { useAppContext } from '../context/AppContext';
+import { serverKeys } from '../hooks/useServerState';
 import { useI18n } from '../i18n';
-import type { ExportSettings, StagedServerFile } from '../models';
+import type { ExportSettings, Mp4FixRequest, Mp4FixResponse, StagedServerFile } from '../models';
 import { uniqueLanguages } from '../utils/helpers';
+import { audioOptions } from '../utils/constants';
 
 export default function ConvertPage() {
   const app = useAppContext();
@@ -302,13 +305,13 @@ export default function ConvertPage() {
                 audio_export: value as ExportSettings['audio_export'],
               }))
             }
-            options={[
-              ['copy', t('convert.copyOriginal')],
-              ['aac', 'AAC'],
-              ['mp3', 'MP3'],
-              ['opus', 'Opus'],
-            ]}
+            options={audioOptions[app.settings.video_export].map((option) => [
+              option, option === 'copy' ? t('convert.copyOriginal') : option.toUpperCase(),
+            ])}
           />
+          {!audioOptions[app.settings.video_export].includes(app.settings.audio_export) && (
+            <p className="form-alert-error" role="alert">{t('convert.incompatibleAudio')}</p>
+          )}
           <ExportSelect
             label={t('convert.subtitles')}
             value={app.settings.subtitle_export}
@@ -369,8 +372,11 @@ export default function ConvertPage() {
             ]}
           />
           <div className="form-group">
-            <label className="form-label">{t('convert.quality')}</label>
+            <label className="form-label" htmlFor="quality-crf">{t('convert.quality')}</label>
             <input
+              id="quality-crf"
+              disabled={Boolean(app.settings.target_video_bitrate.trim())}
+              aria-describedby={app.settings.target_video_bitrate.trim() ? 'quality-bitrate-note' : undefined}
               className="form-input"
               type="number"
               min={0}
@@ -383,6 +389,11 @@ export default function ConvertPage() {
                 }))
               }
             />
+            {app.settings.target_video_bitrate.trim() && (
+              <p id="quality-bitrate-note" className="text-xs text-zinc-400">
+                Hedef video bitrate seçiliyken CRF kullanılmaz.
+              </p>
+            )}
           </div>
           <div className="form-group">
             <label className="form-label">{t('convert.videoBitrate')}</label>
@@ -466,7 +477,7 @@ export default function ConvertPage() {
           <button
             className="btn btn-primary"
             onClick={() => void app.submitBatch()}
-            disabled={app.submitting || selectedStageCount === 0}
+            disabled={app.submitting || selectedStageCount === 0 || !audioOptions[app.settings.video_export].includes(app.settings.audio_export)}
           >
             <Play size={14} />
             <span>{t('convert.queueJobs', { count: selectedStageCount })}</span>
@@ -481,19 +492,20 @@ export default function ConvertPage() {
 
 function Mp4RepairCard() {
   const app = useAppContext();
+  const queryClient = useQueryClient();
   const [fixing, setFixing] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [repaired, setRepaired] = useState<Mp4FixResponse | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const repairController = useRef<AbortController | null>(null);
+  useEffect(() => () => repairController.current?.abort(), []);
 
   // Prefer staged selection, fallback to media browser selection
   const stagedOptions = app.staged.filter((s) => s.name.toLowerCase().endsWith('.mp4'));
   const canUseBrowser = app.selectedPaths.size > 0;
 
   const handleRepair = async () => {
-    let payload: {
-      source_root_key?: string | null;
-      source_path?: string | null;
-      input_filename?: string | null;
-    } | null = null;
+    let payload: Mp4FixRequest | null = null;
     if (selected && stagedOptions.find((s) => s.id === selected)) {
       const item = stagedOptions.find((s) => s.id === selected)!;
       if (item.uploaded) {
@@ -513,12 +525,22 @@ function Mp4RepairCard() {
       return;
     }
     setFixing(true);
+    setRepaired(null);
+    const controller = new AbortController();
+    repairController.current = controller;
     try {
-      const res = await fixMp4(payload);
-      app.showToast(res.message || `Onarıldı: ${res.filename}`, 'success');
+      const res = await fixMp4(payload, controller.signal);
+      setRepaired(res);
+      void queryClient.invalidateQueries({ queryKey: serverKeys.outputs });
+      app.showToast(res.message, 'success');
     } catch (error) {
-      app.showToast(error instanceof Error ? error.message : 'Onarım başarısız.', 'error');
+      if (controller.signal.aborted) {
+        app.showToast('Onarım iptal edildi.', 'info');
+      } else {
+        app.showToast(error instanceof Error ? error.message : 'Onarım başarısız.', 'error');
+      }
     } finally {
+      repairController.current = null;
       setFixing(false);
     }
   };
@@ -529,16 +551,19 @@ function Mp4RepairCard() {
         <Wrench size={14} /> MP4 Onar (faststart + genpts)
       </span>
       <p className="text-xs text-zinc-400">
-        Bozuk moov/faststart olmayan MP4 dosyalarını yerinde onarır. Kaynak tarayıcıdan veya
-        hazırlanan dosyalardan bir MP4 seçin.
+        MP4 dosyasını faststart + genpts ile yeniden paketleyip Çıktılar bölümünde yeni bir
+        onarılmış kopya oluşturur. Kaynak dosya değiştirilmez. Eksik moov verisini yeniden
+        oluşturamaz. Kaynak tarayıcıdan veya hazırlanan dosyalardan bir MP4 seçin.
       </p>
       {stagedOptions.length > 0 && (
         <div className="form-group">
-          <label className="form-label">Hazırlanan MP4 dosyası</label>
+          <label className="form-label" htmlFor="mp4-repair-source">Hazırlanan MP4 dosyası</label>
           <select
+            id="mp4-repair-source"
             className="form-input"
             value={selected ?? ''}
             onChange={(e) => setSelected(e.target.value || null)}
+            disabled={fixing}
           >
             <option value="">— Seçin (veya tarayıcı seçimini kullan) —</option>
             {stagedOptions.map((item) => (
@@ -549,10 +574,33 @@ function Mp4RepairCard() {
           </select>
         </div>
       )}
+      <p role="status" className="text-xs break-all">
+        {repaired ? `Onarılmış kopya: ${repaired.filename}` : fixing ? 'Onarılmış kopya oluşturuluyor…' : ''}
+      </p>
+      {repaired && (
+        <button
+          className="btn btn-outline"
+          disabled={downloading}
+          onClick={() => {
+            setDownloading(true);
+            void downloadOutput(repaired.filename)
+              .catch((error: unknown) => app.showToast(error instanceof Error ? error.message : 'İndirme başarısız.', 'error'))
+              .finally(() => setDownloading(false));
+          }}
+        >
+          <Download size={14} aria-hidden="true" />
+          {downloading ? 'İndiriliyor…' : 'Onarılmış kopyayı indir'}
+        </button>
+      )}
       <div className="flex justify-end">
+        {fixing && (
+          <button className="btn btn-outline" onClick={() => repairController.current?.abort()}>
+            Onarımı iptal et
+          </button>
+        )}
         <button className="btn btn-outline" onClick={() => void handleRepair()} disabled={fixing}>
           <Wrench size={14} />
-          <span>{fixing ? 'Onarılıyor…' : 'Onar'}</span>
+          <span>{fixing ? 'Kopya oluşturuluyor…' : 'Onarılmış kopya oluştur'}</span>
         </button>
       </div>
     </div>
@@ -578,6 +626,9 @@ function ExportSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
+            {!options.some(([optionValue]) => optionValue === value) && (
+              <option value={value} disabled>{value.toUpperCase()}</option>
+            )}
         {options.map(([optionValue, text]) => (
           <option value={optionValue} key={optionValue}>
             {text}
