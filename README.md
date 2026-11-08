@@ -385,7 +385,7 @@ Single `docker-compose.yml` for local, Coolify/Portainer, VPS, and Raspberry Pi:
 - `redis` is `redis:7.2-alpine` with AOF persistence.
 - `APP_DATA_SOURCE` is a bind path (`./data` locally) or named volume (`app-data` on Coolify), mounted at `/app-data:rw,z` to avoid conflicts with platform-managed `/data`. `entrypoint.sh` prepares `input/outputs/temp/logs/data` and drops to `app`.
 - Redis persistence uses the separate `redis-data` named volume (`redis-data:/data`) — **required**, do not remove.
-- Media mounts are read-only (`:ro`, long syntax for correct interpolation of paths with spaces). Host paths come from `MEDIA_*_SOURCE`; container paths must match `MEDIA_MOUNTS`. The opt-in **Next to the original file** output setting needs a writable mount (`read_only: false`); keep the default `:ro` mounts unless you deliberately use that mode.
+- Media mounts are read-only by default (`read_only` defaults to true through `MEDIA_<ROOT>_READ_ONLY`; long syntax keeps paths with spaces intact). Host paths come from `MEDIA_*_SOURCE`; container paths must match `MEDIA_MOUNTS`. The opt-in **Next to the original file** output setting needs a writable mount: set the matching `MEDIA_*_READ_ONLY=false` in `.env` (for example `MEDIA_DOWNLOADS_READ_ONLY=false`) and recreate the container. Keep the default read-only mounts unless you deliberately use that mode; the container runs as uid 1000 and must be able to write to the host folder.
 - Healthcheck: `/health/ready`. `stop_grace_period: 10m` lets FFmpeg drain.
 - BuildKit caches for npm and pip are used; Coolify uses BuildKit. On old Docker without BuildKit, build with `DOCKER_BUILDKIT=1`.
 
@@ -529,7 +529,7 @@ Recommended Coolify settings:
 - Container port: `8765`.
 - Healthcheck path: `/health/ready`.
 
-> When `Docker Compose` is selected, Coolify shows `Docker Compose volume mounts are read-only here` in Persistent Storage. **Do not add manual bind mounts** — media mounts come from `docker-compose.yml` long-syntax volumes (`MEDIA_*_SOURCE -> /media/*:ro`). The only volume you need is `redis-data -> /data`, created automatically.
+> When `Docker Compose` is selected, Coolify shows `Docker Compose volume mounts are read-only here` in Persistent Storage. **Do not add manual bind mounts** — media mounts come from `docker-compose.yml` long-syntax volumes (`MEDIA_*_SOURCE -> /media/*`, read-only unless `MEDIA_<ROOT>_READ_ONLY=false`). The only volume you need is `redis-data -> /data`, created automatically.
 
 Common pitfall: if media appears empty (`docker exec <app> ls -l /media/movies` is empty while host has files), the stack was deployed as **Application** instead of **Docker Compose**. Switch the deploy type, remove stale Persistent Storage entries, and redeploy.
 
@@ -561,8 +561,9 @@ MEDIA_DOWNLOADS_SOURCE=/srv/media/downloads
 APP_DATA_SOURCE=app-data   # local dev: ./data  ·  Coolify: app-data (named volume)
 ```
 
-- `MEDIA_MOUNTS` — container paths shown in the UI (`config.py:107`). Must match `:/media/...:ro` targets in `docker-compose.yml`.
+- `MEDIA_MOUNTS` — container paths shown in the UI (`config.py:107`). Must match the `/media/...` targets in `docker-compose.yml`.
 - `MEDIA_*_SOURCE` — **host** paths (server/NAS). Used only by compose volume interpolation; the app never reads them (`extra="ignore"` in `config.py:43`).
+- `MEDIA_*_READ_ONLY` — per-root bind flag, default `true`. Set the matching root to `false` only when using **Next to the original file** output and the container user (uid 1000) can write to the host folder.
 - `APP_DATA_SOURCE` — writable `DATA_ROOT=/app-data` mount. Use named volume on Coolify, bind path locally.
 
 > **Spaces:** host folders with spaces break YAML if unquoted. Either rename (`TV Series` → `TV_Series`) or keep the env quoted: `MEDIA_SERIES_SOURCE="/srv/media/TV Series"` (compose long syntax is already quoted).
@@ -583,6 +584,7 @@ All other variables have safe defaults and can be omitted:
 | `APP_CPU_LIMIT` / `REDIS_CPU_LIMIT` | `2.0` / `0.5` (Compose) | Docker quotas; recommended Pi 5: `1.5` / `0.25` |
 | `APP_MEMORY_LIMIT` / `REDIS_MEMORY_LIMIT` | `2g` / `256m` (Compose) | Container RAM caps; monitor peak memory before changing |
 | `APP_IMAGE` / `APP_PORT` / `REDIS_HOST_PORT` | See compose | Only for custom image or ports |
+| `MEDIA_*_READ_ONLY` | `true` (Compose) | Set `false` for a root only when writing converted files beside the originals |
 
 Rules:
 
@@ -645,7 +647,7 @@ Media and outputs (Bearer token required):
 System settings (Bearer token required):
 
 - `GET /api/v1/settings` — persisted settings with safe defaults.
-- `POST /api/v1/settings` — persist `worker_concurrency`, `default_export`, `auto_cleanup`, `output`, `ui`. `output.location` is `outputs_dir` (default) or `source_dir`; `output.delete_source_after_success` is off by default. Older clients may send only `worker_concurrency`.
+- `POST /api/v1/settings` — persist `worker_concurrency`, `default_export`, `auto_cleanup`, `output`, `ui`. `output.location` is `outputs_dir` (default) or `source_dir`; `output.delete_source_after_success` is off by default. In `source_dir` mode the worker encodes into a hidden `.bvc-*.part.*` file in the destination folder and renames it on success, so the file is never copied across devices. Older clients may send only `worker_concurrency`.
 - `GET /api/v1/audit` — recent audit events.
 
 Typical settings payload:
@@ -819,7 +821,7 @@ docker compose up --build
 - The API never trusts `source_path` as a raw filesystem path. Inputs are resolved as `source_root_key + source_path` and must remain inside the configured root after `Path.resolve()` (symlinks resolved).
 - Path traversal, absolute-path escapes, missing files, invalid roots, and unsupported extensions are rejected with structured errors (`StructuredErrorResponse`).
 - Host paths never leak to API payloads or frontend state; the UI uses root keys + root-relative paths.
-- Docker media mounts should be read-only (`:ro`) by default. The app modifies source media only in the opt-in **Next to the original file** mode, and deletes the original only when **Delete the original after successful conversion** is enabled.
+- Docker media mounts should be read-only by default (`MEDIA_*_READ_ONLY=true`). The app modifies source media only in the opt-in **Next to the original file** mode, and deletes the original only when **Delete the original after successful conversion** is enabled.
 - The only writable area is `DATA_ROOT`: `input`, `outputs`, `temp`, `logs`, `data`; source folders are writable only in that opt-in mode.
 - Output downloads are filename-sanitized and cannot escape `DATA_ROOT/outputs`. Range and preview endpoints also sanitize. Outputs written next to the source are not served by the Outputs API.
 - Do not commit real `.env` files, media, outputs, SQLite/Redis dumps, logs, `frontend/node_modules/`, `frontend/dist/`, `.pytest_cache/`, `.coverage*`, `venv/`, etc. See `.gitignore`.
@@ -834,6 +836,7 @@ docker compose up --build
 - Local run complains about Redis: use default (`--storage local`) or run `python run_local.py --storage local`; only `--storage redis` needs a local Redis.
 - Jobs stay queued: worker not running or cannot reach the same Redis/local store and media mounts as the API. Check `GET /api/v1/worker/health`.
 - Job fails before FFmpeg: check validation (path, extension, file exists, root valid) and that the media is mounted at the expected container path.
+- Job fails with `Read-only file system` or `Invalid cross-device link` while output location is **Next to the original file**: the media bind is still read-only. Set `MEDIA_<ROOT>_READ_ONLY=false` for the relevant root in `.env` (for example `MEDIA_DOWNLOADS_READ_ONLY=false`), make sure the host folder is writable by uid 1000, then recreate the app container (`docker compose up -d --force-recreate app`). In Coolify, add the same variable and redeploy. The worker now checks the destination before encoding, so this fails immediately instead of after the conversion.
 - Job fails during conversion: ensure `ffmpeg`/`ffprobe` are installed, check `log_tail` and `timeline` in job detail drawer, verify container/codec compatibility.
 - WebM with `audio_export=copy` fallback: worker normalizes to `opus` for container compatibility — set explicitly to `opus` to avoid surprise.
 - Built UI missing locally: `cd frontend && npm run build` or use Vite dev server with API running.

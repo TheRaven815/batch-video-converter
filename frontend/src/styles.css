@@ -1000,6 +1000,59 @@ select.form-input {
   line-height: 1rem;
 }
 
+.settings-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  max-width: 68ch;
+  margin: 0.45rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.1rem;
+}
+
+.settings-note::before {
+  content: '!';
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.05rem;
+  border-radius: 50%;
+  background-color: currentColor;
+  color: var(--zinc-950);
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.settings-note-warning {
+  color: var(--amber-400);
+  background-color: rgba(120, 53, 15, 0.16);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.settings-note-danger {
+  color: var(--rose-400);
+  background-color: rgba(76, 5, 25, 0.24);
+  border-color: rgba(136, 19, 55, 0.45);
+}
+
+:root[data-theme='light'] .settings-note-warning {
+  color: #92400e;
+  background-color: #fffbeb;
+  border-color: #fde68a;
+}
+
+:root[data-theme='light'] .settings-note-danger {
+  color: #9f1239;
+  background-color: #fff1f2;
+  border-color: #fecdd3;
+}
+
 .settings-toggle-row {
   align-items: flex-start;
   gap: 1rem;

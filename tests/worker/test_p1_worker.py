@@ -1,6 +1,7 @@
 """P1 behavior regressions: persisted outcomes, subtitle selection, hardware and dispatch."""
 from __future__ import annotations
 
+import errno
 import json
 import subprocess
 import threading
@@ -428,6 +429,63 @@ def test_output_settings_default_to_app_outputs_without_deletion():
     assert resolved.delete_source_after_success is False
 
 
+def test_temp_output_stays_beside_source_in_source_dir_mode(tmp_path):
+    output = tmp_path / "clip.12345678.mp4"
+    temp = worker._build_temp_output_path(
+        output, "job-id", worker.OutputLocation.source_dir
+    )
+    assert temp.parent == tmp_path
+    assert temp.suffix == ".mp4"
+    assert temp.name.startswith(".bvc-")
+
+    staged = worker._build_temp_output_path(
+        output, "job-id", worker.OutputLocation.outputs_dir
+    )
+    assert staged.parent == worker.settings.temp_dir
+
+
+def test_output_directory_write_probe_cleans_up(tmp_path):
+    worker._ensure_output_directory_writable(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_output_directory_write_probe_reports_read_only(tmp_path, monkeypatch):
+    def read_only_mkstemp(*_args, **_kwargs):
+        raise OSError(errno.EROFS, "Read-only file system")
+
+    monkeypatch.setattr(worker.tempfile, "mkstemp", read_only_mkstemp)
+    with pytest.raises(RuntimeError) as exc_info:
+        worker._ensure_output_directory_writable(tmp_path, source_dir=True)
+    message = str(exc_info.value)
+    assert "not writable" in message
+    assert "MEDIA_*_READ_ONLY=false" in message
+
+
+def test_atomic_move_cross_device_publishes_complete_file(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination_dir = tmp_path / "destination"
+    destination_dir.mkdir()
+    destination = destination_dir / "output.mp4"
+    payload = b"converted-video" * 1024
+    source.write_bytes(payload)
+
+    real_replace = worker.os.replace
+    replace_calls = {"count": 0}
+
+    def flaky_replace(src, dst):
+        if Path(src) == source and replace_calls["count"] == 0:
+            replace_calls["count"] += 1
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(worker.os, "replace", flaky_replace)
+    worker._atomic_move(source, destination)
+
+    assert destination.read_bytes() == payload
+    assert not source.exists()
+    assert not list(destination_dir.glob(".bvc-publish-*"))
+
+
 def test_source_deletion_requires_a_published_output(tmp_path):
     source = tmp_path / "clip.mkv"
     source.write_bytes(b"media")
@@ -465,7 +523,13 @@ def test_source_dir_output_and_optional_source_delete(tmp_path, monkeypatch, del
     monkeypatch.setattr(worker, "_probe_duration_seconds", lambda _path: 1.0)
     monkeypatch.setattr(worker, "_probe_video_codec", lambda _path: "vp9")
     monkeypatch.setattr(worker, "_probe_audio_codec", lambda _path: "aac")
-    monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", video_success)
+    ffmpeg_output_paths: list[Path] = []
+
+    def source_dir_video_success(job, command, **kwargs):
+        ffmpeg_output_paths.append(Path(command[-1]))
+        return video_success(job, command, **kwargs)
+
+    monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", source_dir_video_success)
     with worker._runtime_settings_cache_lock:
         worker._runtime_settings_cache.clear()
     store.set(
@@ -496,6 +560,9 @@ def test_source_dir_output_and_optional_source_delete(tmp_path, monkeypatch, del
         result = repo.get(record.id)
         assert result.status == JobStatus.completed, result.error_message
         assert result.output_location == worker.OutputLocation.source_dir
+        assert ffmpeg_output_paths
+        assert ffmpeg_output_paths[0].parent == media_root
+        assert ffmpeg_output_paths[0].name.startswith(".bvc-")
         output = media_root / f"clip.{record.id[:8]}.mp4"
         assert output.read_bytes() == b"completed-video"
         assert source.exists() is (not delete_source)

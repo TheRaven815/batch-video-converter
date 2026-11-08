@@ -268,7 +268,7 @@ export function SettingsPanel({
                 </select>
                 <p className="settings-help">{t('settings.outputDestinationHelp')}</p>
                 {systemSettings.output.location === 'source_dir' && (
-                  <p className="form-alert-error" role="alert">
+                  <p className="settings-note settings-note-warning" role="note">
                     {t('settings.outputDestinationSourceHelp')}
                   </p>
                 )}
@@ -277,6 +277,11 @@ export function SettingsPanel({
                 <span className="form-toggle-info">
                   <p>{t('settings.deleteSourceAfterSuccess')}</p>
                   <p>{t('settings.deleteSourceAfterSuccessHelp')}</p>
+                  {systemSettings.output.delete_source_after_success && (
+                    <span className="settings-note settings-note-danger" role="alert">
+                      {t('settings.deleteSourceWarning')}
+                    </span>
+                  )}
                 </span>
                 <input
                   id="delete-source-after-success"
@@ -295,11 +300,6 @@ export function SettingsPanel({
                 />
               </label>
             </div>
-            {systemSettings.output.delete_source_after_success && (
-              <p className="form-alert-error" role="alert">
-                {t('settings.deleteSourceWarning')}
-              </p>
-            )}
           </section>
 
           <section

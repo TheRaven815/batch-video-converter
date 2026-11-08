@@ -7,6 +7,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from collections import defaultdict
@@ -273,6 +274,24 @@ def _build_output_path(
     return directory / filename
 
 
+def _build_temp_output_path(
+    output_path: Path,
+    job_id: str,
+    output_location: OutputLocation | str,
+) -> Path:
+    """Choose a temp path on the same filesystem as the final output.
+
+    Source-folder mode encodes directly into a hidden file beside the
+    destination, so publishing is a same-directory rename instead of a
+    potentially slow cross-device copy.  App-output mode keeps the existing
+    ``DATA_ROOT/temp`` staging area.
+    """
+
+    if output_location == OutputLocation.source_dir:
+        return output_path.with_name(f".bvc-{job_id}.part{output_path.suffix}")
+    return settings.temp_dir / output_path.name
+
+
 def _delete_source_after_success(input_path: Path, output_path: Path) -> None:
     """Remove the source only when a distinct, non-empty output exists."""
     if not output_path.is_file():
@@ -284,22 +303,89 @@ def _delete_source_after_success(input_path: Path, output_path: Path) -> None:
     input_path.unlink()
 
 
+def _ensure_output_directory_writable(
+    directory: Path, *, source_dir: bool = False
+) -> None:
+    """Fail fast when the output directory cannot be written.
+
+    Docker media binds are read-only by default, so source-folder output
+    would otherwise encode the whole file before failing at publish time.
+    """
+
+    probe_path: Path | None = None
+    try:
+        fd, probe_name = tempfile.mkstemp(prefix=".bvc-write-probe-", dir=directory)
+        probe_path = Path(probe_name)
+        try:
+            os.write(fd, b"ok")
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOSPC}:
+            hint = (
+                " Make the source media mount writable "
+                "(Docker: read_only: false or MEDIA_*_READ_ONLY=false), "
+                "or choose the app outputs folder as the output location."
+                if source_dir
+                else " Check the output folder permissions and free space."
+            )
+            raise RuntimeError(
+                f"Output folder is not writable: {directory}.{hint}"
+            ) from exc
+        raise
+    finally:
+        if probe_path is not None:
+            try:
+                probe_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _atomic_move(src: Path, dst: Path) -> None:
-    """Atomically move *src* to *dst*, falling back to ``shutil.move`` on EXDEV.
+    """Move *src* to *dst*, publishing cross-device outputs atomically.
 
     ``os.replace`` is atomic when *src* and *dst* are on the same filesystem
     but raises ``EXDEV`` (cross-device link) when Docker bind mounts and named
-    volumes live on different devices.  The fallback preserves the successful
-    transcode instead of leaving a partial temp file behind.
+    volumes live on different devices.  In that case copy into a hidden temp
+    file beside *dst*, then rename it so the final name never exposes a
+    partially copied video.  A read-only destination fails here with a clear
+    OS error; the worker checks writability before encoding as well.
     """
 
     try:
         os.replace(src, dst)
+        return
     except OSError as exc:
-        if exc.errno == errno.EXDEV:
-            shutil.move(str(src), str(dst))
-        else:
+        if exc.errno != errno.EXDEV:
             raise
+
+    temp_dst: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=dst.parent,
+            prefix=".bvc-publish-",
+            suffix=".part",
+            delete=False,
+        ) as target_file:
+            temp_dst = Path(target_file.name)
+            with src.open("rb") as source_file:
+                shutil.copyfileobj(source_file, target_file, length=1024 * 1024)
+        os.replace(temp_dst, dst)
+        temp_dst = None
+    finally:
+        if temp_dst is not None:
+            try:
+                temp_dst.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    try:
+        src.unlink()
+    except OSError:
+        # The destination is already published; temp cleanup in process_job
+        # will retry removing the source copy.
+        pass
 
 
 # Subtitle codecs that can be transcoded to text-based formats (mov_text/webvtt).
@@ -945,16 +1031,23 @@ def _minimum_free_disk_bytes() -> int:
     return settings.min_free_disk_bytes
 
 
-def _ensure_output_disk_space(output_path: Path, required_bytes: int) -> None:
+def _ensure_output_disk_space(
+    output_path: Path,
+    required_bytes: int,
+    *,
+    temp_directory: Path | None = None,
+) -> None:
     """Check every filesystem involved in writing and publishing the output.
 
-    The transcode is written under ``DATA_ROOT/temp`` and then moved to the
-    destination. When those live on different devices the move is a copy, so
-    both filesystems need room.
+    The transcode is written to ``temp_directory`` (``DATA_ROOT/temp`` by
+    default, or beside the destination in source-folder mode) and then moved.
+    When those live on different devices the move is a copy, so both
+    filesystems need room.
     """
+    staging_directory = temp_directory if temp_directory is not None else settings.temp_dir
     minimum_free = max(_minimum_free_disk_bytes(), required_bytes)
     checked_devices: set[int] = set()
-    for directory in (settings.temp_dir, output_path.parent):
+    for directory in (staging_directory, output_path.parent):
         try:
             device = directory.stat().st_dev
         except OSError:
@@ -1267,11 +1360,22 @@ def process_job(job_id: str) -> None:
             if output_location == OutputLocation.source_dir:
                 job_logger.info("çıktı kaynak klasörüne yazılacak: %s", output_path.parent)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            _ensure_output_disk_space(output_path, input_path.stat().st_size)
-            # Transcode into the temp dir and move into the destination only on
-            # success, so partial files are never listed or downloadable.
-            temp_output_path = settings.temp_dir / output_path.name
+            _ensure_output_directory_writable(
+                output_path.parent,
+                source_dir=output_location == OutputLocation.source_dir,
+            )
+            # Source-folder mode encodes directly into the destination folder;
+            # app-output mode stages under DATA_ROOT/temp. Either way the final
+            # name only appears after a successful publish.
+            temp_output_path = _build_temp_output_path(
+                output_path, job_id, output_location
+            )
             temp_output_path.parent.mkdir(parents=True, exist_ok=True)
+            _ensure_output_disk_space(
+                output_path,
+                input_path.stat().st_size,
+                temp_directory=temp_output_path.parent,
+            )
             # One ffprobe covers duration, video/audio codecs and subtitles.
             media_info = _probe_media_info(input_path)
             if media_info is not None:
