@@ -122,16 +122,19 @@ export type UiTheme = 'dark' | 'light' | 'system';
 export type UiDensity = 'comfortable' | 'compact';
 export type DefaultExportSettings = Schemas['DefaultExportSettings'];
 export type AutoCleanupSettings = Schemas['AutoCleanupSettings'];
+export type OutputLocation = Schemas['OutputLocation'];
+export type OutputSettings = Schemas['OutputSettings'];
 export type UiPreferences = Omit<Schemas['UiPreferences'], 'theme' | 'density'> & {
   theme: UiTheme;
   density: UiDensity;
 };
 export type SystemSettings = Omit<
   Schemas['SystemSettings'],
-  'default_export' | 'auto_cleanup' | 'ui'
+  'default_export' | 'auto_cleanup' | 'output' | 'ui'
 > & {
   default_export: DefaultExportSettings;
   auto_cleanup: AutoCleanupSettings;
+  output: OutputSettings;
   ui: UiPreferences;
   retry?: Schemas['RetrySettings'] | null;
   disk_safety?: Schemas['DiskSafetySettings'] | null;

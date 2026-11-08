@@ -961,6 +961,7 @@ export interface components {
             source_path?: string | null;
             /** Output Filename */
             output_filename?: string | null;
+            output_location?: components["schemas"]["OutputLocation"] | null;
             /** Error Message */
             error_message?: string | null;
             /**
@@ -1232,6 +1233,21 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
         };
+        /**
+         * OutputLocation
+         * @enum {string}
+         */
+        OutputLocation: "outputs_dir" | "source_dir";
+        /** OutputSettings */
+        OutputSettings: {
+            /** @default outputs_dir */
+            location: components["schemas"]["OutputLocation"];
+            /**
+             * Delete Source After Success
+             * @default false
+             */
+            delete_source_after_success: boolean;
+        };
         /** RetrySettings */
         RetrySettings: {
             /**
@@ -1297,6 +1313,7 @@ export interface components {
             readonly worker_concurrency_limit: number;
             default_export?: components["schemas"]["DefaultExportSettings"];
             auto_cleanup?: components["schemas"]["AutoCleanupSettings"];
+            output?: components["schemas"]["OutputSettings"];
             retry?: components["schemas"]["RetrySettings"] | null;
             disk_safety?: components["schemas"]["DiskSafetySettings"] | null;
             ui?: components["schemas"]["UiPreferences"];

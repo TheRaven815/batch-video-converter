@@ -266,6 +266,63 @@ def test_corrupt_media_with_null_retry_is_terminal(tmp_path, monkeypatch):
         store.close()
 
 
+def test_source_dir_output_and_delete_source_real(source, tmp_path, monkeypatch):
+    from video_converter.core.job_repository import JobRepository
+    from video_converter.core.models import JobRecord, JobStatus, now_iso
+    from video_converter.core.storage import LocalFileStore
+
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+    repo = JobRepository(store)
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    media_source = media_root / "source.mkv"
+    shutil.copyfile(source, media_source)
+    settings = worker.settings.model_copy(
+        update={
+            "data_root": tmp_path / "data",
+            "media_mounts": f"Media={media_root}",
+            "min_free_disk_bytes": 0,
+        }
+    )
+    for directory in (settings.input_dir, settings.temp_dir, settings.outputs_dir, settings.logs_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(worker, "settings", settings)
+    monkeypatch.setattr(worker, "storage_client", store)
+    monkeypatch.setattr(worker, "job_repository", repo)
+    monkeypatch.setattr(worker, "_shutdown", worker._ShutdownManager())
+    monkeypatch.setattr(worker, "_hardware_encoders", [])
+    with worker._runtime_settings_cache_lock:
+        worker._runtime_settings_cache.clear()
+    store.set(
+        "system:settings",
+        '{"output": {"location": "source_dir", "delete_source_after_success": true}}',
+    )
+    timestamp = now_iso()
+    record = JobRecord(
+        id="source-delete",
+        status=JobStatus.queued,
+        profile="h264_mp4",
+        source_root_key="media",
+        source_path="source.mkv",
+        hardware_acceleration="disabled",
+        encoder_preset="ultrafast",
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    repo.enqueue(record)
+    repo.dequeue(timeout=1)
+    try:
+        worker.process_job(record.id)
+        result = repo.get(record.id)
+        assert result.status == JobStatus.completed, result.error_message
+        output = media_root / result.output_filename
+        assert output.exists() and output.stat().st_size > 0
+        assert not media_source.exists()
+        _run(["ffmpeg", "-v", "error", "-i", str(output), "-f", "null", "-"])
+    finally:
+        store.close()
+
+
 def test_bounded_x265_scaled_output_decodes(source, tmp_path):
     output = tmp_path / "threads.mkv"
     command = worker._ffmpeg_command(source, output, "h265_mp4", "mkv", "aac", "none", None,

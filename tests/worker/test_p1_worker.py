@@ -420,3 +420,84 @@ def test_explicit_hardware_copy_eligible_source_still_encodes(runtime, monkeypat
     assert result.status == JobStatus.completed
     assert result.hardware_acceleration_used == "h264_v4l2m2m"
     assert commands[0][commands[0].index("-c:v") + 1] == "h264_v4l2m2m"
+
+
+def test_output_settings_default_to_app_outputs_without_deletion():
+    resolved = worker._resolve_output_settings({})
+    assert resolved.location == worker.OutputLocation.outputs_dir
+    assert resolved.delete_source_after_success is False
+
+
+def test_source_deletion_requires_a_published_output(tmp_path):
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"media")
+    with pytest.raises(RuntimeError, match="missing"):
+        worker._delete_source_after_success(source, tmp_path / "missing.mp4")
+    empty = tmp_path / "empty.mp4"
+    empty.write_bytes(b"")
+    with pytest.raises(RuntimeError, match="empty"):
+        worker._delete_source_after_success(source, empty)
+    assert source.exists()
+
+
+@pytest.mark.parametrize("delete_source", [False, True])
+def test_source_dir_output_and_optional_source_delete(tmp_path, monkeypatch, delete_source):
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+    repo = JobRepository(store)
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    source = media_root / "clip.mkv"
+    source.write_bytes(b"media-boundary")
+    settings = worker.settings.model_copy(
+        update={
+            "data_root": tmp_path / "data",
+            "media_mounts": f"Media={media_root}",
+            "min_free_disk_bytes": 0,
+        }
+    )
+    for directory in (settings.input_dir, settings.temp_dir, settings.outputs_dir, settings.logs_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(worker, "settings", settings)
+    monkeypatch.setattr(worker, "storage_client", store)
+    monkeypatch.setattr(worker, "job_repository", repo)
+    monkeypatch.setattr(worker, "_shutdown", worker._ShutdownManager())
+    monkeypatch.setattr(worker, "_hardware_encoders", [])
+    monkeypatch.setattr(worker, "_probe_duration_seconds", lambda _path: 1.0)
+    monkeypatch.setattr(worker, "_probe_video_codec", lambda _path: "vp9")
+    monkeypatch.setattr(worker, "_probe_audio_codec", lambda _path: "aac")
+    monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", video_success)
+    with worker._runtime_settings_cache_lock:
+        worker._runtime_settings_cache.clear()
+    store.set(
+        "system:settings",
+        json.dumps(
+            {
+                "output": {
+                    "location": "source_dir",
+                    "delete_source_after_success": delete_source,
+                }
+            }
+        ),
+    )
+    timestamp = now_iso()
+    record = JobRecord(
+        id="source-dir",
+        status=JobStatus.queued,
+        profile="h264_mp4",
+        source_root_key="media",
+        source_path="clip.mkv",
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    repo.enqueue(record)
+    repo.dequeue(timeout=1)
+    try:
+        worker.process_job(record.id)
+        result = repo.get(record.id)
+        assert result.status == JobStatus.completed, result.error_message
+        assert result.output_location == worker.OutputLocation.source_dir
+        output = media_root / f"clip.{record.id[:8]}.mp4"
+        assert output.read_bytes() == b"completed-video"
+        assert source.exists() is (not delete_source)
+    finally:
+        store.close()

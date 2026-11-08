@@ -201,7 +201,7 @@ When changing the API contract:
 - Startup and the API lifespan may requeue stale `running` jobs after a configured duration.
 - `_resolve_input_path` first uses `source_root_key + source_path`; `input_filename` with `DATA_ROOT/input` is supported for backward compatibility.
 - `_resolve_export_options` normalizes video/audio/subtitle export fields. For a WebM target, the profile becomes `vp9_webm`; in WebM, `audio_export=copy` falls back to `opus` for stability.
-- Output files are written under `DATA_ROOT/outputs` in the form `input_stem.jobprefix.ext`.
+- Output files are written under `DATA_ROOT/outputs` in the form `input_stem.jobprefix.ext` by default. When `output.location=source_dir` is enabled in system settings, the same filename is written beside the resolved source file instead; `output.delete_source_after_success` removes the source only after the job is marked completed and the output is verified.
 - FFmpeg progress information is reflected into `progress_percent`, `progress_phase`, `progress_message`, `progress_eta_seconds`, `progress_fps`, `progress_speed`, `progress_bitrate`, `log_tail`, and `timeline` fields.
 - On SIGTERM/SIGINT, graceful shutdown terminates active FFmpeg processes and requeues running jobs as `queued` for the next worker start.
 - If `WORKER_CONCURRENCY` is increased, test CPU/RAM, shared `/app-data` and media mount access, FFmpeg IO load, and Redis/local store behavior.
@@ -223,7 +223,7 @@ When changing the API contract:
 - `source_path` is never trusted directly as a filesystem path; always apply root-relative validation such as `validate_source_path()`.
 - Path traversal must be prevented: test scenarios such as `..`, absolute paths, escaping the root via symlink/resolve, and similar cases.
 - `MEDIA_MOUNTS` uses container paths; host path information must not leak into API payloads or frontend state.
-- Media mounts should be `:ro` in Docker. The application does not modify source media.
+- Media mounts should be `:ro` in Docker by default. Source media is modified only in the opt-in `output.location=source_dir` mode, and the source is deleted only when `output.delete_source_after_success` is enabled; the default app-outputs mode must not modify source media.
 - The only writable area is under `DATA_ROOT`: `input`, `outputs`, `temp`, `logs`, `data`.
 - Preserve filename sanitization on output download endpoints; user input must not escape `DATA_ROOT/outputs`.
 - Do not commit real `.env` files, media archives, output videos, SQLite/Redis data, logs, or build/cache folders.

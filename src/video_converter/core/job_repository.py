@@ -12,7 +12,7 @@ from video_converter.core.job_repository_shared import (
     append_limited as _append_limited,
     is_stale as _is_stale,
 )
-from video_converter.core.models import JobRecord, JobStatus
+from video_converter.core.models import JobRecord, JobStatus, OutputLocation
 
 __all__ = [
     "DEFAULT_STALE_RUNNING_SECONDS",
@@ -183,6 +183,7 @@ class JobRepository:
         progress_phase: str,
         progress_message: str | None,
         output_filename: str | None = None,
+        output_location: OutputLocation | None = None,
         error: str | None = None,
         telemetry: dict[str, Any] | None = None,
         log_line: str | None = None,
@@ -195,6 +196,7 @@ class JobRepository:
                 progress_phase=progress_phase,
                 progress_message=progress_message,
                 output_filename=output_filename,
+                output_location=output_location,
                 error=error,
                 telemetry=telemetry,
                 log_line=log_line,

@@ -28,7 +28,7 @@ from video_converter.core.job_repository_shared import (
     running_index_operations,
     sync_running_index,
 )
-from video_converter.core.models import JobRecord, JobStatus, now_iso
+from video_converter.core.models import JobRecord, JobStatus, OutputLocation, now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -468,6 +468,7 @@ class AsyncJobRepository:
         progress_phase: str,
         progress_message: str | None,
         output_filename: str | None = None,
+        output_location: OutputLocation | None = None,
         error: str | None = None,
         telemetry: dict[str, Any] | None = None,
         log_line: str | None = None,
@@ -549,6 +550,9 @@ class AsyncJobRepository:
 
             if output_filename:
                 record.output_filename = output_filename
+
+            if output_location is not None:
+                record.output_location = output_location
 
             if await self._compare_and_store(
                 record,

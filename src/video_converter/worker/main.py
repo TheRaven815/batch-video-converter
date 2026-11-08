@@ -19,7 +19,14 @@ import redis
 
 from video_converter.core.config import WORKER_HEARTBEAT_KEY, ensure_runtime_dirs, get_settings
 from video_converter.core.job_repository import DEFAULT_STALE_RUNNING_SECONDS, JobRepository
-from video_converter.core.models import JobStatus, RetrySettings, now_iso, validate_audio_container
+from video_converter.core.models import (
+    JobStatus,
+    OutputLocation,
+    OutputSettings,
+    RetrySettings,
+    now_iso,
+    validate_audio_container,
+)
 from video_converter.core.path_validation import validate_source_path
 from video_converter.core.storage import create_storage_client, is_redis_storage
 from video_converter.worker.mp4_fix import fix_mp4
@@ -238,10 +245,43 @@ def _resolve_export_options(data: dict[str, Any]) -> tuple[str, str, str, str, s
     return profile, video_export, audio_export, subtitle_export, subtitle_language
 
 
-def _build_output_path(input_path: Path, video_export: str, job_id: str) -> Path:
+def _resolve_output_settings(raw_settings: dict[str, Any] | None = None) -> OutputSettings:
+    """Read the global output destination, falling back to the safe default."""
+    raw = raw_settings if raw_settings is not None else _runtime_settings()
+    configured = raw.get("output")
+    if not isinstance(configured, dict):
+        return OutputSettings()
+    try:
+        return OutputSettings.model_validate(configured)
+    except ValueError:
+        return OutputSettings()
+
+
+def _build_output_path(
+    input_path: Path,
+    video_export: str,
+    job_id: str,
+    output_location: OutputLocation | str = OutputLocation.outputs_dir,
+) -> Path:
     ext = f".{video_export}" if video_export in {"mp4", "mkv", "webm"} else ".mp4"
     filename = f"{input_path.stem}.{job_id[:8]}{ext}"
-    return settings.outputs_dir / filename
+    directory = (
+        input_path.parent
+        if output_location == OutputLocation.source_dir
+        else settings.outputs_dir
+    )
+    return directory / filename
+
+
+def _delete_source_after_success(input_path: Path, output_path: Path) -> None:
+    """Remove the source only when a distinct, non-empty output exists."""
+    if not output_path.is_file():
+        raise RuntimeError("Converted output is missing; source file was kept")
+    if output_path.stat().st_size <= 0:
+        raise RuntimeError("Converted output is empty; source file was kept")
+    if output_path.resolve() == input_path.resolve():
+        raise RuntimeError("Converted output matches the source path; source file was kept")
+    input_path.unlink()
 
 
 def _atomic_move(src: Path, dst: Path) -> None:
@@ -905,6 +945,31 @@ def _minimum_free_disk_bytes() -> int:
     return settings.min_free_disk_bytes
 
 
+def _ensure_output_disk_space(output_path: Path, required_bytes: int) -> None:
+    """Check every filesystem involved in writing and publishing the output.
+
+    The transcode is written under ``DATA_ROOT/temp`` and then moved to the
+    destination. When those live on different devices the move is a copy, so
+    both filesystems need room.
+    """
+    minimum_free = max(_minimum_free_disk_bytes(), required_bytes)
+    checked_devices: set[int] = set()
+    for directory in (settings.temp_dir, output_path.parent):
+        try:
+            device = directory.stat().st_dev
+        except OSError:
+            continue
+        if device in checked_devices:
+            continue
+        checked_devices.add(device)
+        disk = shutil.disk_usage(directory)
+        if disk.free < minimum_free:
+            raise RuntimeError(
+                f"Insufficient free disk space on {directory}: {disk.free} bytes "
+                f"available, {minimum_free} bytes required"
+            )
+
+
 def _run_ffmpeg_with_progress(
     job_id: str,
     cmd: list[str],
@@ -1177,7 +1242,13 @@ def process_job(job_id: str) -> None:
             profile, video_export, audio_export, subtitle_export, subtitle_language = (
                 _resolve_export_options(data)
             )
-            output_path = _build_output_path(input_path, video_export, job_id)
+            output_settings = _resolve_output_settings()
+            output_location = output_settings.location
+            output_path = _build_output_path(
+                input_path, video_export, job_id, output_location
+            )
+            if output_path.resolve() == input_path.resolve():
+                raise RuntimeError("Output path must differ from the source file")
             # Skip existing output: legacy skip_existing behavior (PLAN 6.3 O-2)
             skip_existing = bool(data.get("skip_existing_output"))
             if skip_existing and output_path.exists():
@@ -1189,18 +1260,15 @@ def process_job(job_id: str) -> None:
                     progress_phase="completed",
                     progress_message="Çıktı zaten mevcut, atlandı",
                     output_filename=output_path.name,
+                    output_location=output_location,
                     log_line="Çıktı zaten mevcut, atlandı",
                 )
                 return
-            disk = shutil.disk_usage(settings.data_root)
-            minimum_free = max(_minimum_free_disk_bytes(), input_path.stat().st_size)
-            if disk.free < minimum_free:
-                raise RuntimeError(
-                    f"Insufficient free disk space: {disk.free} bytes available, "
-                    f"{minimum_free} bytes required"
-                )
+            if output_location == OutputLocation.source_dir:
+                job_logger.info("çıktı kaynak klasörüne yazılacak: %s", output_path.parent)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            # Transcode into the temp dir and move into outputs/ only on
+            _ensure_output_disk_space(output_path, input_path.stat().st_size)
+            # Transcode into the temp dir and move into the destination only on
             # success, so partial files are never listed or downloadable.
             temp_output_path = settings.temp_dir / output_path.name
             temp_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1518,8 +1586,20 @@ def process_job(job_id: str) -> None:
                     progress_phase="completed",
                     progress_message="Conversion completed with warnings" if has_warnings else "Conversion completed",
                     output_filename=output_path.name,
+                    output_location=output_location,
                 )
                 job_logger.info("status set to completed")
+                if output_settings.delete_source_after_success:
+                    try:
+                        _delete_source_after_success(input_path, output_path)
+                    except (OSError, RuntimeError) as exc:
+                        _add_job_warning(
+                            job_id,
+                            f"Source file was not deleted: {exc}",
+                            job_logger,
+                        )
+                    else:
+                        job_logger.info("source file deleted after successful conversion")
             finally:
                 # On success the temp files were moved away; on failure,
                 # cancel, or shutdown this removes the partial output.

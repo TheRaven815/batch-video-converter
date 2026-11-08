@@ -7,7 +7,7 @@
 
 Self-hosted batch video converter: browse server-side media folders and queue FFmpeg conversions from a web UI. Built for Raspberry Pi, small VPS, and Docker/Coolify — with a local dev mode that needs no Redis.
 
-Source media stays read-only. All runtime data lives under a single `DATA_ROOT`. No personal data or host paths leak to the frontend.
+Source media stays read-only by default; an opt-in setting can write converted files next to the originals and optionally remove the original after success. All other runtime data lives under a single `DATA_ROOT`. No personal data or host paths leak to the frontend.
 
 ## Table of Contents
 
@@ -39,6 +39,7 @@ Source media stays read-only. All runtime data lives under a single `DATA_ROOT`.
 - Batch job creation with validation and idempotent `Idempotency-Key` support.
 - FFmpeg worker with progress, telemetry (fps/speed/bitrate), log tail, timeline, graceful shutdown, and stale-job recovery.
 - Export controls for video container, audio handling, subtitle handling, and subtitle language selection — including multi-stream selection.
+- Output destination setting: the app outputs folder or next to the original file, with an optional delete-source-after-success switch (off by default).
 - Queue dashboard with filters, SSE + poll fallback, batch summaries, bulk actions (cancel/start/archive/delete), and recent outputs with download/preview.
 - MP4 repair tool (`ffmpeg -c copy -movflags +faststart`) for fragmented/corrupt MP4s.
 - Redis-backed queue/storage for Docker/production; SQLite-backed local queue for single-machine dev.
@@ -384,7 +385,7 @@ Single `docker-compose.yml` for local, Coolify/Portainer, VPS, and Raspberry Pi:
 - `redis` is `redis:7.2-alpine` with AOF persistence.
 - `APP_DATA_SOURCE` is a bind path (`./data` locally) or named volume (`app-data` on Coolify), mounted at `/app-data:rw,z` to avoid conflicts with platform-managed `/data`. `entrypoint.sh` prepares `input/outputs/temp/logs/data` and drops to `app`.
 - Redis persistence uses the separate `redis-data` named volume (`redis-data:/data`) — **required**, do not remove.
-- Media mounts are read-only (`:ro`, long syntax for correct interpolation of paths with spaces). Host paths come from `MEDIA_*_SOURCE`; container paths must match `MEDIA_MOUNTS`.
+- Media mounts are read-only (`:ro`, long syntax for correct interpolation of paths with spaces). Host paths come from `MEDIA_*_SOURCE`; container paths must match `MEDIA_MOUNTS`. The opt-in **Next to the original file** output setting needs a writable mount (`read_only: false`); keep the default `:ro` mounts unless you deliberately use that mode.
 - Healthcheck: `/health/ready`. `stop_grace_period: 10m` lets FFmpeg drain.
 - BuildKit caches for npm and pip are used; Coolify uses BuildKit. On old Docker without BuildKit, build with `DOCKER_BUILDKIT=1`.
 
@@ -587,8 +588,8 @@ Rules:
 
 - `MEDIA_MOUNTS` are **container** paths; `MEDIA_*_SOURCE` are **host** paths — they must pair in `docker-compose.yml`.
 - Do **not** add manual `Persistent Storage` directories in Coolify when using **Docker Compose** deploy type. Volumes come from the compose file; only `redis-data` is needed.
-- Media mounts must stay `:ro`; the app never writes there.
-- Everything writable lives under `DATA_ROOT=/app-data` (`input`, `outputs`, `temp`, `logs`, `data`).
+- Media mounts should stay `:ro` unless you enable the opt-in source-folder output setting. The default app-outputs mode never writes there.
+- Everything writable lives under `DATA_ROOT=/app-data` (`input`, `outputs`, `temp`, `logs`, `data`); the source-folder output mode is the explicit exception.
 
 ## API Summary
 
@@ -625,7 +626,7 @@ Media and outputs (Bearer token required):
 - `GET /api/v1/media/streams?root_key=...&path=...` — probe all streams (video/audio/subtitle) via ffprobe.
 - `GET /api/v1/media/subtitles?root_key=...&path=...` — legacy subtitle probe (kept for compatibility).
 - `POST /api/v1/media/uploads` — multipart upload into `DATA_ROOT/input`.
-- `GET /api/v1/outputs` — list generated outputs.
+- `GET /api/v1/outputs` — list generated outputs in `DATA_ROOT/outputs`; files written next to source files are not listed.
 - `GET /api/v1/outputs/{filename}/download` — sanitized download.
 - `GET /api/v1/outputs/{filename}/preview` — inline preview with range support.
 - `GET /api/v1/outputs/{filename}/thumbnail` — generated thumbnail.
@@ -644,7 +645,7 @@ Media and outputs (Bearer token required):
 System settings (Bearer token required):
 
 - `GET /api/v1/settings` — persisted settings with safe defaults.
-- `POST /api/v1/settings` — persist `worker_concurrency`, `default_export`, `auto_cleanup`, `ui`. Older clients may send only `worker_concurrency`.
+- `POST /api/v1/settings` — persist `worker_concurrency`, `default_export`, `auto_cleanup`, `output`, `ui`. `output.location` is `outputs_dir` (default) or `source_dir`; `output.delete_source_after_success` is off by default. Older clients may send only `worker_concurrency`.
 - `GET /api/v1/audit` — recent audit events.
 
 Typical settings payload:
@@ -818,9 +819,9 @@ docker compose up --build
 - The API never trusts `source_path` as a raw filesystem path. Inputs are resolved as `source_root_key + source_path` and must remain inside the configured root after `Path.resolve()` (symlinks resolved).
 - Path traversal, absolute-path escapes, missing files, invalid roots, and unsupported extensions are rejected with structured errors (`StructuredErrorResponse`).
 - Host paths never leak to API payloads or frontend state; the UI uses root keys + root-relative paths.
-- Docker media mounts should be read-only (`:ro`). The app never modifies source media.
-- The only writable area is `DATA_ROOT`: `input`, `outputs`, `temp`, `logs`, `data`.
-- Output downloads are filename-sanitized and cannot escape `DATA_ROOT/outputs`. Range and preview endpoints also sanitize.
+- Docker media mounts should be read-only (`:ro`) by default. The app modifies source media only in the opt-in **Next to the original file** mode, and deletes the original only when **Delete the original after successful conversion** is enabled.
+- The only writable area is `DATA_ROOT`: `input`, `outputs`, `temp`, `logs`, `data`; source folders are writable only in that opt-in mode.
+- Output downloads are filename-sanitized and cannot escape `DATA_ROOT/outputs`. Range and preview endpoints also sanitize. Outputs written next to the source are not served by the Outputs API.
 - Do not commit real `.env` files, media, outputs, SQLite/Redis dumps, logs, `frontend/node_modules/`, `frontend/dist/`, `.pytest_cache/`, `.coverage*`, `venv/`, etc. See `.gitignore`.
 - Auth: bcrypt (with legacy SHA fallback for migration), rate limit on login, `JWT_SECRET` persisted at `DATA_ROOT/data/jwt_secret` with `0600`.
 

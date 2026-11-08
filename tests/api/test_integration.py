@@ -116,6 +116,7 @@ def test_system_settings_persist_extended_payload(
             "retention_days": 14,
             "keep_minimum_outputs": 5,
         },
+        "output": {"location": "source_dir", "delete_source_after_success": True},
         "ui": {"theme": "system", "density": "compact"},
     }
 
@@ -126,6 +127,7 @@ def test_system_settings_persist_extended_payload(
     assert update_response.json()["default_export"] == payload["default_export"]
     assert get_response.json()["worker_concurrency"] == 3
     assert get_response.json()["auto_cleanup"]["retention_days"] == 14
+    assert get_response.json()["output"] == payload["output"]
     assert get_response.json()["ui"] == payload["ui"]
 
 
@@ -141,6 +143,23 @@ def test_system_settings_accept_legacy_worker_only_payload(
     assert response.status_code == 200
     payload = response.json()
     assert payload["worker_concurrency"] == 2
+    assert payload["output"] == {
+        "location": "outputs_dir",
+        "delete_source_after_success": False,
+    }
+
+
+def test_system_settings_reject_invalid_output_location(
+    integration_client: tuple[TestClient, _FakeRedis, Path],
+) -> None:
+    client, _, _ = integration_client
+
+    response = client.post(
+        "/api/v1/settings",
+        json={"output": {"location": "filesystem", "delete_source_after_success": False}},
+    )
+
+    assert response.status_code == 422
 
 
 def test_health_endpoints_report_liveness_and_readiness(

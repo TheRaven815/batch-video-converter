@@ -67,6 +67,11 @@ class HardwareAcceleration(StrEnum):
     v4l2m2m = "v4l2m2m"
 
 
+class OutputLocation(StrEnum):
+    outputs_dir = "outputs_dir"
+    source_dir = "source_dir"
+
+
 class JobCreateRequest(BaseModel):
     input_filename: Optional[str] = Field(default=None, max_length=1024)
     source_root_key: Optional[str] = Field(default=None, max_length=64)
@@ -137,6 +142,7 @@ class JobRecord(BaseModel):
     source_root_key: Optional[str] = None
     source_path: Optional[str] = None
     output_filename: Optional[str] = None
+    output_location: Optional[OutputLocation] = None
     error_message: Optional[str] = None
     progress_percent: Optional[int] = Field(default=0, ge=0, le=100)
     progress_phase: Optional[str] = Field(default="queued", max_length=100)
@@ -427,11 +433,17 @@ class DefaultExportSettings(BaseModel):
         return self
 
 
+class OutputSettings(BaseModel):
+    location: OutputLocation = OutputLocation.outputs_dir
+    delete_source_after_success: bool = False
+
+
 class SystemSettings(BaseModel):
     worker_concurrency: int = Field(default=1, ge=1, le=8)
     worker_concurrency_limit: int = Field(default=1, ge=1, le=8, json_schema_extra={"readOnly": True})
     default_export: DefaultExportSettings = Field(default_factory=DefaultExportSettings)
     auto_cleanup: AutoCleanupSettings = Field(default_factory=AutoCleanupSettings)
+    output: OutputSettings = Field(default_factory=OutputSettings)
     retry: Optional[RetrySettings] = None
     disk_safety: Optional[DiskSafetySettings] = None
     ui: UiPreferences = Field(default_factory=UiPreferences)

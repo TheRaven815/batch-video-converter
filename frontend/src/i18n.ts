@@ -305,6 +305,20 @@ const en = {
   'settings.concurrencyHelp': 'For resource-constrained devices like Raspberry Pi, keep this at 1.',
   'settings.concurrencyLimit':
     'Server ceiling: {{count}} job(s), set by WORKER_CONCURRENCY. Lowering this waits for running jobs to finish.',
+  'settings.outputFiles': 'Output files',
+  'settings.outputDestination': 'Output location',
+  'settings.outputDestinationHelp':
+    'Choose where converted files are written. The app outputs folder appears on the Outputs page; files written next to the source do not.',
+  'settings.outputDestinationDataRoot': 'App outputs folder',
+  'settings.outputDestinationSource': 'Next to the original file',
+  'settings.outputDestinationSourceHelp':
+    'Writes beside each source file. Docker media mounts are read-only by default, so this mode fails unless the mount is writable. These files are not listed under Outputs and are not covered by automatic cleanup.',
+  'settings.deleteSourceAfterSuccess': 'Delete the original after successful conversion',
+  'settings.deleteSourceAfterSuccessHelp':
+    'The source file is removed only after the converted output has been written.',
+  'settings.deleteSourceWarning':
+    'This permanently deletes source media. Enable it only for files you can regenerate or do not need to keep.',
+  'job.outputInSourceFolder': 'in source folder',
   'convert.incompatibleAudio':
     'WebM requires Opus. Choose Opus or copy, or switch to MP4/MKV. Your audio preference has not been changed.',
   'job.warnings': 'Output warnings',
@@ -648,6 +662,20 @@ const tr: Messages = {
     'Raspberry Pi gibi kaynakları sınırlı cihazlarda bu değeri 1 olarak bırakın.',
   'settings.concurrencyLimit':
     'Sunucu tavanı: {{count}} iş, WORKER_CONCURRENCY ile belirlenir. Sınırı düşürmek çalışan işleri durdurmaz.',
+  'settings.outputFiles': 'Çıktı dosyaları',
+  'settings.outputDestination': 'Çıktı konumu',
+  'settings.outputDestinationHelp':
+    'Dönüştürülen dosyaların nereye yazılacağını seçin. Uygulama çıktı klasörü Outputs sayfasında görünür; orijinalin yanına yazılan dosyalar görünmez.',
+  'settings.outputDestinationDataRoot': 'Uygulama çıktı klasörü',
+  'settings.outputDestinationSource': 'Orijinal dosyanın yanına',
+  'settings.outputDestinationSourceHelp':
+    'Her kaynak dosyanın yanına yazar. Docker medya bağlantıları varsayılan olarak salt okunurdur; bu mod ancak bağlantı yazılabilir yapılırsa çalışır. Bu dosyalar Outputs listesinde görünmez ve otomatik temizliğe dahil edilmez.',
+  'settings.deleteSourceAfterSuccess': 'Başarılı dönüşümden sonra orijinali sil',
+  'settings.deleteSourceAfterSuccessHelp':
+    'Kaynak dosya yalnızca dönüştürülen çıktı yazıldıktan sonra silinir.',
+  'settings.deleteSourceWarning':
+    'Bu işlem kaynak medyayı kalıcı olarak siler. Yalnızca yeniden oluşturabileceğiniz veya saklamanıza gerek olmayan dosyalar için açın.',
+  'job.outputInSourceFolder': 'kaynak klasörde',
   'convert.incompatibleAudio':
     'WebM için Opus gerekir. Opus veya kopyalama seçin ya da MP4/MKV kullanın. Ses tercihiniz değiştirilmedi.',
   'job.warnings': 'Çıktı uyarıları',

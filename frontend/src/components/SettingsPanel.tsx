@@ -22,6 +22,10 @@ const defaultSystemSettings: SystemSettings = {
     delete_terminal_jobs: true,
     job_retention_days: 90,
   },
+  output: {
+    location: 'outputs_dir',
+    delete_source_after_success: false,
+  },
   retry: {
     enabled: true,
     max_attempts: 3,
@@ -87,6 +91,7 @@ export function SettingsPanel({
         ...settingsQuery.data.default_export,
       },
       auto_cleanup: { ...defaultSystemSettings.auto_cleanup, ...settingsQuery.data.auto_cleanup },
+      output: { ...defaultSystemSettings.output, ...settingsQuery.data.output },
       ui: { ...defaultSystemSettings.ui, ...settingsQuery.data.ui },
     });
   }, [settingsQuery.data]);
@@ -230,6 +235,71 @@ export function SettingsPanel({
                 </select>
               </div>
             </div>
+          </section>
+
+          <section
+            className="settings-section settings-section-wide"
+            aria-labelledby="output-settings-title"
+          >
+            <span className="form-section-title" id="output-settings-title">
+              {t('settings.outputFiles')}
+            </span>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label" htmlFor="output-location">
+                  {t('settings.outputDestination')}
+                </label>
+                <select
+                  id="output-location"
+                  className="form-input"
+                  value={systemSettings.output.location}
+                  onChange={(e) =>
+                    patchSettings({
+                      output: {
+                        ...systemSettings.output,
+                        location: e.target.value as SystemSettings['output']['location'],
+                      },
+                    })
+                  }
+                  disabled={settingsLoading}
+                >
+                  <option value="outputs_dir">{t('settings.outputDestinationDataRoot')}</option>
+                  <option value="source_dir">{t('settings.outputDestinationSource')}</option>
+                </select>
+                <p className="settings-help">{t('settings.outputDestinationHelp')}</p>
+                {systemSettings.output.location === 'source_dir' && (
+                  <p className="form-alert-error" role="alert">
+                    {t('settings.outputDestinationSourceHelp')}
+                  </p>
+                )}
+              </div>
+              <label className="form-toggle-row settings-toggle-row" htmlFor="delete-source-after-success">
+                <span className="form-toggle-info">
+                  <p>{t('settings.deleteSourceAfterSuccess')}</p>
+                  <p>{t('settings.deleteSourceAfterSuccessHelp')}</p>
+                </span>
+                <input
+                  id="delete-source-after-success"
+                  className="form-checkbox"
+                  type="checkbox"
+                  checked={systemSettings.output.delete_source_after_success}
+                  onChange={(e) =>
+                    patchSettings({
+                      output: {
+                        ...systemSettings.output,
+                        delete_source_after_success: e.target.checked,
+                      },
+                    })
+                  }
+                  disabled={settingsLoading}
+                />
+              </label>
+            </div>
+            {systemSettings.output.delete_source_after_success && (
+              <p className="form-alert-error" role="alert">
+                {t('settings.deleteSourceWarning')}
+              </p>
+            )}
           </section>
 
           <section

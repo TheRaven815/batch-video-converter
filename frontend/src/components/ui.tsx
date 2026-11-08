@@ -312,12 +312,18 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
               label={t('job.output')}
               value={
                 job.output_filename ? (
-                  <button
-                    className="detail-link"
-                    onClick={() => void downloadOutput(job.output_filename!)}
-                  >
-                    {job.output_filename}
-                  </button>
+                  job.output_location === 'source_dir' ? (
+                    <span>
+                      {job.output_filename} ({t('job.outputInSourceFolder')})
+                    </span>
+                  ) : (
+                    <button
+                      className="detail-link"
+                      onClick={() => void downloadOutput(job.output_filename!)}
+                    >
+                      {job.output_filename}
+                    </button>
+                  )
                 ) : (
                   '—'
                 )
