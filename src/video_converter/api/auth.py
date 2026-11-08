@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from video_converter.api.audit import write_audit_event
 from video_converter.api.common import maybe_await
+from video_converter.api.errors import ApiError, ApiHTTPException
 from video_converter.core.config import Settings, get_settings
 from video_converter.core.models import StructuredErrorResponse
 
@@ -52,10 +53,29 @@ def _append_security_audit(actor: str, action: str, target: str) -> None:
 
 INVALID_CREDENTIALS_MESSAGE = "Invalid username or password"
 INVALID_TOKEN_MESSAGE = "Could not validate credentials"
+AUTH_NOT_CONFIGURED_CODE = "auth_not_configured"
 AUTH_NOT_CONFIGURED_MESSAGE = (
     "Authentication is not configured. Complete the first-run setup in the UI "
     "or set APP_USERNAME and APP_PASSWORD."
 )
+
+
+def _auth_not_configured() -> ApiHTTPException:
+    """Typed 503 so the UI can send the user to first-run setup.
+
+    A plain ``service_unavailable`` cannot be told apart from a real storage
+    outage; the frontend uses this code to clear a stale token and reopen the
+    setup screen instead of keeping the app shell with every request failing.
+    """
+    return ApiHTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        error=ApiError(
+            code=AUTH_NOT_CONFIGURED_CODE,
+            message=AUTH_NOT_CONFIGURED_MESSAGE,
+            recoverable=True,
+        ),
+    )
+
 
 AUTH_CREDENTIALS_KEY = "auth:credentials"
 
@@ -234,9 +254,7 @@ async def _validate_token(token: str | None, *, audience: str | None = None) -> 
     settings = get_settings()
     creds = await get_active_credentials()
     if creds is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AUTH_NOT_CONFIGURED_MESSAGE
-        )
+        raise _auth_not_configured()
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -386,9 +404,7 @@ async def initial_setup(req: SetupRequest) -> Token:
 async def _issue_login_token(request: Request, form_data: OAuth2PasswordRequestForm) -> Token:
     creds = await get_active_credentials()
     if creds is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AUTH_NOT_CONFIGURED_MESSAGE
-        )
+        raise _auth_not_configured()
 
     key = _rate_limit_key(request)
     _check_rate_limit(key)
@@ -491,9 +507,7 @@ async def update_credentials(
 ):
     creds = await get_active_credentials()
     if creds is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AUTH_NOT_CONFIGURED_MESSAGE
-        )
+        raise _auth_not_configured()
     if not await asyncio.to_thread(
         verify_password, req.current_password, str(creds["password_hash"])
     ):

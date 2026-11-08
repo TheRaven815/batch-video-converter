@@ -54,6 +54,15 @@ function extractErrorMessage(text: string): string | null {
   return null;
 }
 
+function extractErrorCode(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as StructuredErrorResponse;
+    return parsed.error?.code ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function requestWithHeaders<T>(
   path: string,
   init?: RequestInit,
@@ -74,13 +83,19 @@ async function requestWithHeaders<T>(
   });
 
   if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    const message = extractErrorMessage(text);
+    const code = extractErrorCode(text);
+
     // Expired/revoked session: drop the token and return to the login page.
-    if (response.status === 401 && authToken) {
+    // The same applies when the backend has no credentials at all (for
+    // example after a fresh Redis volume): trusting a stale browser token
+    // would otherwise leave the app shell open with every request failing.
+    if (authToken && (response.status === 401 || code === 'auth_not_configured')) {
       setAuthToken(null);
       window.location.reload();
     }
-    const text = await response.text().catch(() => '');
-    const message = extractErrorMessage(text);
+
     throw new Error(
       message ||
         translate(loadLanguage(), 'api.requestFailed', {

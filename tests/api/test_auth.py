@@ -141,9 +141,15 @@ def test_empty_password_disables_login_instead_of_disabling_auth(
         "/api/v1/auth/login", data={"username": "admin", "password": ""}
     )
     assert login.status_code == 503
+    assert login.json()["error"]["code"] == "auth_not_configured"
 
     protected = unconfigured_auth_client.get("/api/v1/jobs")
     assert protected.status_code == 503
+    assert protected.json()["error"]["code"] == "auth_not_configured"
+
+    setup = unconfigured_auth_client.get("/api/v1/auth/setup-status")
+    assert setup.status_code == 200
+    assert setup.json() == {"needs_setup": True}
 
 
 def _login(client: TestClient) -> str:
