@@ -4,9 +4,10 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from redis.asyncio import Redis as AsyncRedis
 
-from video_converter.api import auth
+from video_converter.api import auth, routes
 from video_converter.api.async_storage import (
     AsyncJobRepository,
     AsyncLocalStore,
@@ -77,6 +78,29 @@ def test_auth_storage_must_be_supplied_by_lifespan(monkeypatch: pytest.MonkeyPat
 def test_app_factory_does_not_create_runtime_storage() -> None:
     application = create_app()
     assert application.state is not None
+
+
+def test_lifespan_binds_runtime_when_attributes_are_placeholders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty ``routes`` placeholders must not count as an injected runtime."""
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("VIDEO_CONVERTER_STORAGE", "local")
+    monkeypatch.setenv("MEDIA_MOUNTS", "Movies=/media/movies")
+    monkeypatch.setattr(routes, "settings", None)
+    monkeypatch.setattr(routes, "storage_client", None)
+    monkeypatch.setattr(routes, "job_repository", None)
+    monkeypatch.setattr(auth, "_storage_client", None)
+
+    with TestClient(create_app()) as client:
+        live_response = client.get("/health/live")
+        ready_response = client.get("/health/ready")
+
+    assert live_response.status_code == 200
+    assert ready_response.status_code == 200
+    assert routes.settings is not None
+    assert routes.storage_client is not None
+    assert routes.job_repository is not None
 
 
 def test_local_async_storage_is_reserved_for_local_mode(tmp_path: Path) -> None:

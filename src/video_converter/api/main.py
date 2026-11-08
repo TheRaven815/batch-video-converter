@@ -48,18 +48,23 @@ async def storage_error_handler(_request, exc: StorageError) -> JSONResponse:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Own runtime resources and release them together on shutdown."""
-    has_injected_runtime = all(
-        name in routes.__dict__ for name in ("settings", "storage_client", "job_repository")
-    )
-    if has_injected_runtime:
-        configured_settings = routes.settings
-        storage = routes.storage_client
-    else:
+    # ``routes`` always defines these attributes (as ``None`` placeholders), so
+    # their presence alone does not mean a runtime was injected. Tests bind the
+    # attributes directly; a normal process still needs them created here.
+    configured_settings = routes.settings
+    if configured_settings is None:
         configured_settings = get_settings()
+
+    storage = routes.storage_client
+    repository = routes.job_repository
+    if storage is None:
         ensure_runtime_dirs(configured_settings)
         storage = create_async_storage_client(configured_settings)
         repository = AsyncJobRepository(storage)
-        routes.configure_runtime(configured_settings, storage, repository)
+    elif repository is None:
+        repository = AsyncJobRepository(storage)
+
+    routes.configure_runtime(configured_settings, storage, repository)
     if auth._storage_client is None:
         auth.configure_runtime(configured_settings, storage)
 
