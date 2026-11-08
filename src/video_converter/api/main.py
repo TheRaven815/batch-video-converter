@@ -17,7 +17,10 @@ from fastapi.staticfiles import StaticFiles
 
 from video_converter.api import auth, routes
 from video_converter.api.async_storage import AsyncJobRepository, create_async_storage_client
-from video_converter.api.errors import structured_http_exception_handler, structured_validation_exception_handler
+from video_converter.api.errors import (
+    structured_http_exception_handler,
+    structured_validation_exception_handler,
+)
 from video_converter.api.routers import audit, batches, health, jobs, media, outputs, tools, ui
 from video_converter.api.routers import settings as settings_router
 from video_converter.core.config import ensure_runtime_dirs, get_settings
@@ -68,6 +71,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if auth._storage_client is None:
         auth.configure_runtime(configured_settings, storage)
 
+    # Surface the first-run state at startup: without this, an unconfigured
+    # deployment only shows generic 503s in the access log and the UI keeps a
+    # stale token, so "everything is red" looks like a storage/worker failure.
+    try:
+        if await auth.get_active_credentials() is None:
+            logger.warning(
+                "Authentication is not configured; complete the first-run setup at /ui "
+                "or set APP_USERNAME and APP_PASSWORD."
+            )
+    except Exception:  # noqa: BLE001 - diagnostics must not block serving
+        logger.warning("Could not verify authentication configuration", exc_info=True)
+
     try:
         yield
     finally:
@@ -82,7 +97,9 @@ def create_app() -> FastAPI:
     application = FastAPI(title="Video Converter API", version="0.1.0", lifespan=lifespan)
     application.add_exception_handler(HTTPException, structured_http_exception_handler)
     application.add_exception_handler(StorageError, storage_error_handler)
-    application.add_exception_handler(RequestValidationError, structured_validation_exception_handler)
+    application.add_exception_handler(
+        RequestValidationError, structured_validation_exception_handler
+    )
     application.include_router(auth.router, prefix="/api/v1")
     for route_group in (
         health.router,
