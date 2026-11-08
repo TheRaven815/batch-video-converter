@@ -90,6 +90,7 @@ export interface StagedServerFile {
 
 export interface ExportSettings {
   video_export: VideoExport;
+  copy_video: boolean;
   audio_export: AudioExport;
   subtitle_export: SubtitleExport;
   subtitle_language: string;

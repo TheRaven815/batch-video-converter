@@ -39,6 +39,20 @@ def test_default_export_rejects_invalid_target_bitrate() -> None:
     assert DefaultExportSettings(target_video_bitrate="4500k").target_video_bitrate == "4500k"
 
 
+def test_copy_video_requires_compatible_container_and_settings() -> None:
+    assert JobCreateRequest(video_export="mp4", copy_video=True).copy_video is True
+    assert JobCreateRequest(video_export="mkv", copy_video=True).copy_video is True
+
+    with pytest.raises(ValidationError, match="WebM"):
+        JobCreateRequest(video_export="webm", audio_export="opus", copy_video=True)
+    with pytest.raises(ValidationError, match="CRF"):
+        JobCreateRequest(copy_video=True, quality_crf=20)
+    with pytest.raises(ValidationError, match="bitrate"):
+        JobCreateRequest(copy_video=True, target_video_bitrate="4M")
+    with pytest.raises(ValidationError, match="resize"):
+        JobCreateRequest(copy_video=True, resolution="720p")
+
+
 @pytest.mark.parametrize("field", ["audio_stream_indexes", "subtitle_stream_indexes"])
 def test_stream_indexes_reject_negative_values(field: str) -> None:
     with pytest.raises(ValidationError):

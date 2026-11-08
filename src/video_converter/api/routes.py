@@ -219,7 +219,14 @@ def _apply_system_defaults(
     for field in _SYSTEM_DEFAULT_EXPORT_FIELDS:
         if field in explicit:
             continue
+        if payload.copy_video and field in {"quality_crf", "target_video_bitrate", "resolution"}:
+            # Copy mode rejects these settings; do not inject a server default
+            # that would make an otherwise valid remux job fail validation.
+            continue
         value = getattr(default_export, field, None)
+        if payload.copy_video and field == "video_export" and str(value) == "webm":
+            # WebM cannot carry an arbitrary copied video stream.
+            continue
         if value is not None:
             updates[field] = value
 
@@ -253,6 +260,7 @@ def _build_job_record(payload: JobCreateRequest, *, batch_id: str | None = None)
         status=JobStatus.queued,
         profile=payload.profile,
         video_export=payload.video_export,
+        copy_video=payload.copy_video,
         audio_export=payload.audio_export,
         subtitle_export=payload.subtitle_export,
         input_filename=inferred_name,

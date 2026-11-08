@@ -22,6 +22,7 @@ export const subtitleOptions: SubtitleExport[] = ['none', 'embedded', 'separate_
 
 export const defaultSettings: ExportSettings = {
   video_export: 'mp4',
+  copy_video: false,
   audio_export: 'copy',
   subtitle_export: 'none',
   subtitle_language: '',
@@ -45,11 +46,20 @@ export function loadStoredPresets(): LocalPreset[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((preset) => preset && typeof preset === 'object')
-      .map((preset) => ({
-        ...preset,
-        description: preset.description ?? '',
-        settings: { ...defaultSettings, ...(preset.settings ?? {}) },
-      }));
+      .map((preset) => {
+        const settings = { ...defaultSettings, ...(preset.settings ?? {}) };
+        if (settings.video_export === 'webm') settings.copy_video = false;
+        if (settings.copy_video) {
+          settings.quality_crf = null;
+          settings.target_video_bitrate = '';
+          settings.resolution = 'original';
+        }
+        return {
+          ...preset,
+          description: preset.description ?? '',
+          settings,
+        };
+      });
   } catch {
     return [];
   }

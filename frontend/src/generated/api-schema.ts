@@ -881,6 +881,11 @@ export interface components {
             profile: components["schemas"]["ExportProfile"];
             /** @default mp4 */
             video_export: components["schemas"]["VideoExport"];
+            /**
+             * Copy Video
+             * @default false
+             */
+            copy_video: boolean;
             /** @default copy */
             audio_export: components["schemas"]["AudioExport"];
             /** @default none */
@@ -937,6 +942,11 @@ export interface components {
             profile: components["schemas"]["ExportProfile"];
             /** @default mp4 */
             video_export: components["schemas"]["VideoExport"];
+            /**
+             * Copy Video
+             * @default false
+             */
+            copy_video: boolean;
             /** @default copy */
             audio_export: components["schemas"]["AudioExport"];
             /** @default none */

@@ -73,6 +73,7 @@ class JobCreateRequest(BaseModel):
     source_path: Optional[str] = Field(default=None, max_length=2048)
     profile: ExportProfile = ExportProfile.h264_mp4
     video_export: VideoExport = VideoExport.mp4
+    copy_video: bool = False
     audio_export: AudioExport = AudioExport.copy
     subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)
@@ -96,8 +97,19 @@ class JobCreateRequest(BaseModel):
     skip_existing_output: bool = False
 
     @model_validator(mode="after")
-    def _validate_audio_container(self) -> "JobCreateRequest":
+    def _validate_export_options(self) -> "JobCreateRequest":
         validate_audio_container(self.video_export, self.audio_export)
+        if self.copy_video:
+            if self.video_export == VideoExport.webm:
+                raise ValueError(
+                    "Video copy (remux) is not supported for WebM output; choose MP4 or MKV"
+                )
+            if self.quality_crf is not None or self.target_video_bitrate:
+                raise ValueError(
+                    "Video copy (remux) cannot be combined with CRF or a target video bitrate"
+                )
+            if self.resolution != VideoResolution.original:
+                raise ValueError("Video copy (remux) cannot resize; set resolution to original")
         return self
 
 
@@ -117,6 +129,7 @@ class JobRecord(BaseModel):
 
     profile: ExportProfile
     video_export: VideoExport = VideoExport.mp4
+    copy_video: bool = False
     audio_export: AudioExport = AudioExport.copy
     subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)

@@ -318,15 +318,41 @@ export default function ConvertPage() {
         )}
 
         <span className="form-section-title border-b pb-2 mt-4">{t('convert.exportOptions')}</span>
+        <label className="form-toggle-row" htmlFor="copy-video">
+          <span className="form-toggle-info">
+            <p>{t('convert.copyVideo')}</p>
+            <p>{t('convert.copyVideoHelp')}</p>
+          </span>
+          <input
+            id="copy-video"
+            type="checkbox"
+            className="form-checkbox"
+            checked={app.settings.copy_video}
+            disabled={app.settings.video_export === 'webm'}
+            onChange={(event) =>
+              app.setSettings((current) => ({
+                ...current,
+                copy_video: event.target.checked,
+                ...(event.target.checked
+                  ? { quality_crf: null, target_video_bitrate: '', resolution: 'original' }
+                  : {}),
+              }))
+            }
+          />
+        </label>
         <div className="form-grid">
           <SelectField
             label={t('convert.videoFormat')}
             value={app.settings.video_export}
             onChange={(value) =>
-              app.setSettings((current) => ({
-                ...current,
-                video_export: value as ExportSettings['video_export'],
-              }))
+              app.setSettings((current) => {
+                const video_export = value as ExportSettings['video_export'];
+                return {
+                  ...current,
+                  video_export,
+                  ...(video_export === 'webm' ? { copy_video: false } : {}),
+                };
+              })
             }
             options={[
               ['mp4', 'MP4 (H.264)'],
@@ -382,6 +408,7 @@ export default function ConvertPage() {
           <SelectField
             label={t('convert.resolution')}
             value={app.settings.resolution}
+            disabled={app.settings.copy_video}
             onChange={(value) =>
               app.setSettings((current) => ({
                 ...current,
@@ -398,6 +425,7 @@ export default function ConvertPage() {
           <SelectField
             label={t('convert.encoderPreset')}
             value={app.settings.encoder_preset}
+            disabled={app.settings.copy_video}
             onChange={(value) =>
               app.setSettings((current) => ({
                 ...current,
@@ -418,7 +446,9 @@ export default function ConvertPage() {
             </label>
             <input
               id="quality-crf"
-              disabled={Boolean(app.settings.target_video_bitrate.trim())}
+              disabled={
+                app.settings.copy_video || Boolean(app.settings.target_video_bitrate.trim())
+              }
               aria-describedby={
                 app.settings.target_video_bitrate.trim() ? 'quality-bitrate-note' : undefined
               }
@@ -449,6 +479,7 @@ export default function ConvertPage() {
               id="video-bitrate"
               className="form-input"
               placeholder={t('convert.videoBitrateHint')}
+              disabled={app.settings.copy_video}
               value={app.settings.target_video_bitrate}
               onChange={(event) =>
                 app.setSettings((current) => ({
@@ -481,6 +512,7 @@ export default function ConvertPage() {
           <SelectField
             label={t('convert.hardwareAcceleration')}
             value={app.settings.hardware_acceleration}
+            disabled={app.settings.copy_video}
             onChange={(value) =>
               app.setSettings((current) => ({
                 ...current,

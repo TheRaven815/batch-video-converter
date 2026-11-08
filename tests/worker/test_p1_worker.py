@@ -233,6 +233,52 @@ def test_fallback_preserves_numeric_subtitles(runtime, monkeypatch, fallback):
         assert not any("language:" in part for part in command)
 
 
+def test_explicit_video_copy_ignores_encoder_settings(runtime, monkeypatch):
+    _store, repo, _settings = runtime
+    commands = []
+
+    def run(job_id, command, **kwargs):
+        commands.append(command)
+        return video_success(job_id, command, **kwargs)
+
+    monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", run)
+    record = enqueue(
+        repo,
+        copy_video=True,
+        quality_crf=20,
+        target_video_bitrate="4M",
+        resolution="1080p",
+        hardware_acceleration="v4l2m2m",
+    )
+    worker.process_job(record.id)
+    result = repo.get(record.id)
+    assert result.status == JobStatus.completed, result.error_message
+    assert result.warnings and "copy" in result.warnings[0].lower()
+    assert len(commands) == 1
+    command = commands[0]
+    assert command[command.index("-c:v") + 1] == "copy"
+    assert "-crf" not in command
+    assert "-b:v" not in command
+    assert "-vf" not in command
+
+
+def test_explicit_video_copy_failure_does_not_reencode(runtime, monkeypatch):
+    _store, repo, _settings = runtime
+    commands = []
+
+    def run(*args, **_kwargs):
+        commands.append(args)
+        return 1, "Video codec not supported in MP4"
+
+    monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", run)
+    record = enqueue(repo, copy_video=True)
+    worker.process_job(record.id)
+    result = repo.get(record.id)
+    assert result.status == JobStatus.failed
+    assert len(commands) == 1
+    assert "Video copy (remux) failed" in result.error_message
+
+
 @pytest.mark.parametrize("quality,available,expected", [(0, True, "cannot honor CRF"), (None, False, "unavailable"), (None, True, "V4L2 encoding failed")])
 def test_explicit_hardware_never_silently_falls_back(runtime, monkeypatch, quality, available, expected):
     _store, repo, _settings = runtime

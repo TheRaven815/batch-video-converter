@@ -54,16 +54,42 @@ export default function PresetsPage() {
           />
         </div>
         <span className="form-section-title border-b pb-2 mt-4">{t('presets.exportOptions')}</span>
+        <label className="form-toggle-row" htmlFor="preset-copy-video">
+          <span className="form-toggle-info">
+            <p>{t('convert.copyVideo')}</p>
+            <p>{t('convert.copyVideoHelp')}</p>
+          </span>
+          <input
+            id="preset-copy-video"
+            type="checkbox"
+            className="form-checkbox"
+            checked={app.presetSettings.copy_video}
+            disabled={app.presetSettings.video_export === 'webm'}
+            onChange={(event) =>
+              app.setPresetSettings((current) => ({
+                ...current,
+                copy_video: event.target.checked,
+                ...(event.target.checked
+                  ? { quality_crf: null, target_video_bitrate: '', resolution: 'original' }
+                  : {}),
+              }))
+            }
+          />
+        </label>
         <div className="form-grid preset-options-grid mt-4">
           <SelectField
             label={t('convert.videoFormat')}
             value={app.presetSettings.video_export}
             options={choices.video_export}
             onChange={(value) =>
-              app.setPresetSettings((current) => ({
-                ...current,
-                video_export: value as ExportSettings['video_export'],
-              }))
+              app.setPresetSettings((current) => {
+                const video_export = value as ExportSettings['video_export'];
+                return {
+                  ...current,
+                  video_export,
+                  ...(video_export === 'webm' ? { copy_video: false } : {}),
+                };
+              })
             }
           />
           <SelectField
@@ -105,6 +131,7 @@ export default function PresetsPage() {
           <SelectField
             label={t('convert.resolution')}
             value={app.presetSettings.resolution}
+            disabled={app.presetSettings.copy_video}
             options={[
               ['original', t('convert.original')],
               ['1080p', '1080p'],
@@ -121,6 +148,7 @@ export default function PresetsPage() {
           <SelectField
             label={t('convert.encoderPreset')}
             value={app.presetSettings.encoder_preset}
+            disabled={app.presetSettings.copy_video}
             options={[
               ['ultrafast', t('convert.ultraFast')],
               ['veryfast', t('convert.veryFast')],
@@ -138,6 +166,7 @@ export default function PresetsPage() {
           <SelectField
             label={t('convert.hardwareAcceleration')}
             value={app.presetSettings.hardware_acceleration}
+            disabled={app.presetSettings.copy_video}
             options={[
               ['auto', t('convert.autoDetect')],
               ['disabled', t('convert.disabled')],
@@ -156,6 +185,7 @@ export default function PresetsPage() {
             min={0}
             max={51}
             placeholder="Auto"
+            disabled={app.presetSettings.copy_video}
             onChange={(quality_crf) =>
               app.setPresetSettings((current) => ({ ...current, quality_crf }))
             }
@@ -163,6 +193,7 @@ export default function PresetsPage() {
           <TextField
             label={t('convert.videoBitrate')}
             value={app.presetSettings.target_video_bitrate}
+            disabled={app.presetSettings.copy_video}
             onChange={(target_video_bitrate) =>
               app.setPresetSettings((current) => ({ ...current, target_video_bitrate }))
             }
@@ -221,7 +252,9 @@ export default function PresetsPage() {
               <button
                 className="btn btn-primary flex-grow justify-center"
                 onClick={() => {
-                  app.setSettings({ ...defaultSettings, ...preset.settings });
+                  const nextSettings = { ...defaultSettings, ...preset.settings };
+                  if (nextSettings.video_export === 'webm') nextSettings.copy_video = false;
+                  app.setSettings(nextSettings);
                   navigate('/convert');
                   app.showToast(t('presets.loaded', { name: preset.name }), 'info');
                 }}
@@ -256,11 +289,13 @@ function TextField({
   value,
   onChange,
   placeholder,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
@@ -273,6 +308,7 @@ function TextField({
         className="form-input"
         value={value}
         placeholder={placeholder}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
     </div>
@@ -286,6 +322,7 @@ function NumberField({
   placeholder,
   min,
   max,
+  disabled = false,
 }: {
   label: string;
   value: number | null;
@@ -293,6 +330,7 @@ function NumberField({
   placeholder?: string;
   min?: number;
   max?: number;
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
@@ -308,6 +346,7 @@ function NumberField({
         max={max}
         placeholder={placeholder}
         value={value ?? ''}
+        disabled={disabled}
         onChange={(event) =>
           onChange(event.target.value === '' ? null : Number(event.target.value))
         }

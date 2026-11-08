@@ -101,6 +101,7 @@ function applyStoredExportDefaults(
   const defaults = stored.default_export;
   const next: ExportSettings = { ...current };
   if (defaults.video_export) next.video_export = defaults.video_export;
+  if (defaults.video_export === 'webm') next.copy_video = false;
   if (defaults.audio_export) next.audio_export = defaults.audio_export;
   if (defaults.subtitle_export) next.subtitle_export = defaults.subtitle_export;
   if (defaults.subtitle_language) next.subtitle_language = defaults.subtitle_language;
@@ -115,6 +116,11 @@ function applyStoredExportDefaults(
   if (defaults.encoder_preset) next.encoder_preset = defaults.encoder_preset;
   if (defaults.hardware_acceleration) next.hardware_acceleration = defaults.hardware_acceleration;
   if (stored.retry?.max_attempts) next.max_attempts = stored.retry.max_attempts;
+  if (next.copy_video) {
+    next.quality_crf = null;
+    next.target_video_bitrate = '';
+    next.resolution = 'original';
+  }
   return next;
 }
 
@@ -433,6 +439,7 @@ export function App() {
         source_path: item.uploaded ? undefined : item.sourcePath,
         profile: deriveProfile(settings.video_export),
         video_export: settings.video_export,
+        copy_video: settings.copy_video,
         audio_export: settings.audio_export,
         subtitle_export: settings.subtitle_export,
         subtitle_language: settings.subtitle_language || null,

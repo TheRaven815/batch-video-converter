@@ -118,6 +118,10 @@ Notes:
   silently changing the codec. MP4/Opus muxing is allowed, not a guarantee of
   playback on every device.
 - Audio `copy` is validated per container; incompatible source codecs are transcoded.
+- Video copy (`copy_video=true`, UI: **Copy video**) remuxes the video stream without
+  re-encoding for MP4/MKV. It is rejected for WebM and cannot be combined with a CRF,
+  target video bitrate, or resized output. Incompatible audio still falls back to AAC,
+  so use `audio_export=copy` to preserve compatible audio too.
 - Video `quality_crf` is optional/nullable: omitted quality, no target bitrate, and
   original resolution allow compatible H.264 stream copy. Any explicit CRF
   (including `0`), target video bitrate, or resized resolution forces encoding.
@@ -392,6 +396,8 @@ docker compose up --build -d
 
 Default deployment maps no video devices. Raspberry Pi 5 has no hardware H.264
 encoder; use software encoding. Keep `WORKER_CONCURRENCY=1` on constrained devices.
+For MKV → MP4 without re-encoding, enable **Copy video** in the export options:
+the video stream is remuxed, so even HEVC sources finish in seconds.
 
 When adding media roots, update both places:
 
@@ -673,6 +679,7 @@ Typical job payload:
   "source_path": "Example/Movie.mkv",
   "profile": "h264_mp4",
   "video_export": "mp4",
+  "copy_video": false,
   "audio_export": "copy",
   "subtitle_export": "embedded",
   "subtitle_language": "eng"
@@ -682,6 +689,7 @@ Typical job payload:
 Export values used by the UI:
 
 - `video_export`: `mp4`, `mkv`, `webm`
+- `copy_video`: `true` remuxes the video stream (MP4/MKV only; no re-encode)
 - `audio_export`: `copy`, `aac`, `mp3`, `opus`
 - `subtitle_export`: `none`, `embedded`, `separate_srt`
 

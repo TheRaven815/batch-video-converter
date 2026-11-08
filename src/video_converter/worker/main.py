@@ -1241,25 +1241,49 @@ def process_job(job_id: str) -> None:
             audio_bitrate_kbps = (
                 int(raw_audio_bitrate) if raw_audio_bitrate is not None else None
             )
-            prefer_stream_copy_video = (
+            copy_video = bool(data.get("copy_video"))
+            target_video_bitrate = data.get("target_video_bitrate")
+            resolution = str(data.get("resolution") or "original")
+            if copy_video and video_export == "webm":
+                raise ValueError(
+                    "Video copy (remux) is not supported for WebM output; choose MP4 or MKV"
+                )
+            if copy_video and (
+                quality_crf is not None or target_video_bitrate or resolution != "original"
+            ):
+                _add_job_warning(
+                    job_id,
+                    "Video copy is enabled; CRF, video bitrate and resolution settings are ignored",
+                    job_logger,
+                )
+                # Copy mode cannot encode or scale; drop the conflicting knobs
+                # before building the command instead of letting FFmpeg fail.
+                quality_crf = None
+                target_video_bitrate = None
+                resolution = "original"
+            prefer_stream_copy_video = copy_video or (
                 profile in {"h264_mp4", "h264_mkv"}
                 and video_export in {"mp4", "mkv"}
                 and quality_crf is None
-                and not data.get("target_video_bitrate")
-                and str(data.get("resolution") or "original") == "original"
+                and not target_video_bitrate
+                and resolution == "original"
                 and video_codec_probe == "h264"
             )
             hardware_request = str(data.get("hardware_acceleration") or "auto")
+            if copy_video:
+                # Stream copy does not use an encoder; ignore an explicit
+                # hardware request instead of failing on unavailable V4L2.
+                hardware_request = "disabled"
             hardware_encoder: str | None = None
             requested_encoder = {"h264_mp4": "h264_v4l2m2m", "h264_mkv": "h264_v4l2m2m", "h265_mp4": "hevc_v4l2m2m"}.get(profile)
-            hardware_compatible = quality_crf is None or bool(data.get("target_video_bitrate"))
-            if hardware_request == "v4l2m2m":
+            hardware_compatible = quality_crf is None or bool(target_video_bitrate)
+            if not copy_video and hardware_request == "v4l2m2m":
                 if not hardware_compatible:
                     raise ValueError("Explicit V4L2 encoding cannot honor CRF; select bitrate or software encoding")
                 if requested_encoder not in _available_hardware_encoders():
                     raise ValueError(f"Explicit V4L2 encoding unavailable for {profile}; hardware encode probe failed")
                 prefer_stream_copy_video = False
-            if (hardware_request != "disabled" and hardware_compatible
+            if (not copy_video and hardware_request != "disabled" and hardware_compatible
                     and requested_encoder in _available_hardware_encoders() and not prefer_stream_copy_video):
                 hardware_encoder = requested_encoder
             current_record = job_repository.get(job_id)
@@ -1324,9 +1348,9 @@ def process_job(job_id: str) -> None:
                     prefer_stream_copy_video=prefer_stream_copy_video,
                     ffmpeg_threads=settings.ffmpeg_threads,
                     quality_crf=quality_crf,
-                    target_video_bitrate=data.get("target_video_bitrate"),
+                    target_video_bitrate=target_video_bitrate,
                     audio_bitrate_kbps=audio_bitrate_kbps,
-                    resolution=str(data.get("resolution") or "original"),
+                    resolution=resolution,
                     encoder_preset=str(data.get("encoder_preset") or "veryfast"),
                     hardware_encoder=hardware_encoder,
                     audio_stream_indexes=audio_stream_indexes,
@@ -1341,6 +1365,7 @@ def process_job(job_id: str) -> None:
 
                 if (
                     return_code not in {0, 130}
+                    and not copy_video
                     and (prefer_stream_copy_video or (hardware_encoder and hardware_request == "auto"))
                     and not _is_cancel_requested(job_id)
                     and not _shutdown.is_shutting_down
@@ -1370,9 +1395,9 @@ def process_job(job_id: str) -> None:
                         prefer_stream_copy_video=False,
                         ffmpeg_threads=settings.ffmpeg_threads,
                         quality_crf=quality_crf,
-                        target_video_bitrate=data.get("target_video_bitrate"),
+                        target_video_bitrate=target_video_bitrate,
                         audio_bitrate_kbps=audio_bitrate_kbps,
-                        resolution=str(data.get("resolution") or "original"),
+                        resolution=resolution,
                         encoder_preset=str(data.get("encoder_preset") or "veryfast"),
                         hardware_encoder=hardware_encoder,
                         audio_stream_indexes=audio_stream_indexes,
@@ -1406,7 +1431,13 @@ def process_job(job_id: str) -> None:
 
                 if return_code != 0:
                     stderr_tail = (stderr_text or "ffmpeg failed").strip()[-700:]
-                    if hardware_request == "v4l2m2m":
+                    if copy_video:
+                        stderr_tail = (
+                            f"Video copy (remux) failed for {video_export.upper()}; the source "
+                            "video codec may not be compatible with this container. Disable "
+                            f"video copy to re-encode. {stderr_tail}"
+                        )
+                    elif hardware_request == "v4l2m2m":
                         stderr_tail = f"Explicit V4L2 encoding failed: {stderr_tail}"
                     raise RuntimeError(stderr_tail)
 

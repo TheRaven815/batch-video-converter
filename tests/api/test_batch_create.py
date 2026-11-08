@@ -63,6 +63,29 @@ def test_create_jobs_batch_enqueues_all_records_in_single_repository_call(
     assert fake_repository.enqueued_batches == [[job.id for job in response.jobs]]
 
 
+def test_create_job_preserves_copy_video_flag(tmp_path: Path, monkeypatch: Any) -> None:
+    media_root = tmp_path / "media"
+    media_root.mkdir(parents=True)
+    (media_root / "one.mkv").write_text("video", encoding="utf-8")
+    _patch_media_root(monkeypatch, media_root)
+
+    monkeypatch.setattr(api, "job_repository", _CapturingJobRepository())
+    payload = JobBatchCreateRequest(
+        jobs=[
+            JobCreateRequest(
+                source_root_key="root",
+                source_path="one.mkv",
+                copy_video=True,
+            )
+        ]
+    )
+
+    response = api.create_jobs_batch(payload)
+
+    assert response.errors == []
+    assert response.jobs[0].copy_video is True
+
+
 def test_create_jobs_batch_reuses_idempotency_key_response(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

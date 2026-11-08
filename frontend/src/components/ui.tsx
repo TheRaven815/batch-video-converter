@@ -298,6 +298,7 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
               value={`${job.video_export} / ${job.audio_export} / ${job.subtitle_export}`}
               mono
             />
+            {job.copy_video && <DetailItem label={t('job.videoMode')} value={t('job.copyMode')} />}
             <DetailItem label={t('job.attempts')} value={job.attempt_count} mono />
             <DetailItem
               label={t('job.batch')}
@@ -970,11 +971,13 @@ export function SelectField({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   options: ReadonlyArray<readonly [string, string]>;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   const id = React.useId();
   return (
@@ -987,6 +990,7 @@ export function SelectField({
         className="form-input"
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
       >
         {!options.some(([optionValue]) => optionValue === value) && (
           <option value={value} disabled>
