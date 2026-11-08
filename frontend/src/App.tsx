@@ -677,7 +677,7 @@ export function App() {
               <HealthPill label="Redis" ok={server.redisHealthy} />
               <HealthPill
                 label={t('service.worker')}
-                ok={server.workerHealth?.status === 'ok'}
+                ok={server.workerHealth?.worker_online === true}
                 meta={
                   server.workerHealth
                     ? `${server.workerHealth.running_jobs} ${t('common.active')}`

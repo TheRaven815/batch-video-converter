@@ -260,7 +260,10 @@ export function useServerState(enabled: boolean, filters: JobFilters) {
       outputs,
       batches,
       workerHealth,
-      apiHealthy: workerHealth?.status === 'ok',
+      // The API pill reflects the probe request itself; ``status`` already
+      // folds in Redis and the worker, so using it here made all three pills
+      // red whenever only the worker was offline.
+      apiHealthy: healthQuery.status === 'success',
       redisHealthy: workerHealth?.redis === 'ok',
       jobsLoading: jobsQuery.isLoading,
       jobsRefreshing: jobsQuery.isFetching,
@@ -280,6 +283,7 @@ export function useServerState(enabled: boolean, filters: JobFilters) {
       outputs,
       batches,
       workerHealth,
+      healthQuery.status,
       jobsQuery.isLoading,
       jobsQuery.isFetching,
       jobsQuery.fetchNextPage,
