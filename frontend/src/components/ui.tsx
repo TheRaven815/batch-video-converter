@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import type {
   BatchSummaryDto,
   JobStatus,
@@ -9,7 +9,18 @@ import type {
 } from '../models';
 import { downloadJobLog, downloadOutput, getProtectedMediaUrl } from '../api';
 import { statusVariant, getProgress, formatEta, formatDate, formatBytes } from '../utils/helpers';
-import { Trash2, Download, Layers, Archive, Cpu, X, Play, FileText } from 'lucide-react';
+import {
+  Trash2,
+  Download,
+  Layers,
+  Archive,
+  Cpu,
+  X,
+  Play,
+  FileText,
+  Search,
+  XCircle,
+} from 'lucide-react';
 import { useI18n, type MessageKey } from '../i18n';
 
 export function HealthPill({ label, ok, meta }: { label: string; ok: boolean; meta?: string }) {
@@ -93,6 +104,50 @@ export function EmptyState({
   );
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function useFocusTrap(active: boolean, containerRef: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!active) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const focusable = () =>
+      Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (element) => element.getAttribute('aria-hidden') !== 'true',
+      );
+
+    focusable()[0]?.focus();
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const current = document.activeElement;
+      if (event.shiftKey && (current === first || !container.contains(current))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (current === last || !container.contains(current))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      previouslyFocused?.focus?.();
+    };
+  }, [active, containerRef]);
+}
+
 export function ConfirmDialog({
   open,
   title,
@@ -111,6 +166,8 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(open, dialogRef);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -126,6 +183,7 @@ export function ConfirmDialog({
     <div className="modal-overlay" onClick={onCancel}>
       <div
         className="modal-card"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -165,6 +223,8 @@ function DetailItem({
 
 export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClose: () => void }) {
   const { language, t } = useI18n();
+  const drawerRef = useRef<HTMLElement>(null);
+  useFocusTrap(Boolean(job), drawerRef);
   useEffect(() => {
     if (!job) return;
     const onKey = (e: KeyboardEvent) => {
@@ -191,6 +251,7 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
       <div className="detail-overlay" onClick={onClose}></div>
       <aside
         className="detail-drawer"
+        ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-label={t('job.details', { name })}
@@ -219,7 +280,9 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
           <div className="detail-section">
             <span className="detail-section-title">{t('job.warnings')}</span>
             <ul className="settings-help" style={{ overflowWrap: 'anywhere' }}>
-              {job.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+              {job.warnings.map((warning, index) => (
+                <li key={index}>{warning}</li>
+              ))}
             </ul>
           </div>
         )}
@@ -351,13 +414,11 @@ export function JobDetailDrawer({ job, onClose }: { job: JobRecord | null; onClo
 
 export function OutputsPanel({
   outputs,
-  compact = false,
   onClear,
   onDownload,
   onDelete,
 }: {
   outputs: OutputFileDto[];
-  compact?: boolean;
   onClear?: () => void;
   onDownload?: (filename: string) => void;
   onDelete?: (filename: string) => void;
@@ -388,7 +449,7 @@ export function OutputsPanel({
       </div>
       <div className="space-y-2 outputs-scroll pr-1">
         {outputs.length ? (
-          outputs.slice(0, compact ? 6 : 20).map((output) => (
+          outputs.slice(0, 20).map((output) => (
             <div className="output-item" key={output.filename}>
               <OutputThumbnail
                 path={output.thumbnail_url}
@@ -405,9 +466,9 @@ export function OutputsPanel({
               <button
                 onClick={() => {
                   if (!output.preview_url) return;
-                  void getProtectedMediaUrl(output.preview_url).then((url) =>
-                    window.open(url, '_blank', 'noopener,noreferrer'),
-                  );
+                  void getProtectedMediaUrl(output.preview_url)
+                    .then((url) => window.open(url, '_blank', 'noopener,noreferrer'))
+                    .catch(() => undefined);
                 }}
                 className="output-btn"
                 title={t('common.preview')}
@@ -450,7 +511,13 @@ function OutputThumbnail({ path, alt }: { path?: string | null; alt: string }) {
   useEffect(() => {
     let active = true;
     if (path) {
-      void getProtectedMediaUrl(path).then((resolved) => active && setUrl(resolved));
+      void getProtectedMediaUrl(path)
+        .then((resolved) => {
+          if (active) setUrl(resolved);
+        })
+        .catch(() => {
+          if (active) setUrl(null);
+        });
     }
     return () => {
       active = false;
@@ -571,19 +638,7 @@ export function JobControls({
             aria-label={t('job.searchAria')}
           />
           <span className="input-icon">
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
+            <Search size={14} aria-hidden="true" />
           </span>
         </div>
 
@@ -613,6 +668,7 @@ export function JobControls({
         >
           <option value="">{t('job.allProfiles')}</option>
           <option value="h264_mp4">H.264 MP4</option>
+          <option value="h264_mkv">H.264 MKV</option>
           <option value="h265_mp4">H.265 MKV</option>
           <option value="vp9_webm">WebM VP9</option>
         </select>
@@ -630,6 +686,16 @@ export function JobControls({
           <option value="oldest">{t('job.sortOldest')}</option>
           <option value="progress">{t('job.sortProgress')}</option>
         </select>
+
+        <label className="form-toggle-row" htmlFor="include-archived">
+          <input
+            id="include-archived"
+            type="checkbox"
+            checked={filters.includeArchived}
+            onChange={(e) => setFilters((v) => ({ ...v, includeArchived: e.target.checked }))}
+          />
+          <span>{t('job.showArchived')}</span>
+        </label>
       </div>
 
       <div className="panel-actions">
@@ -797,7 +863,9 @@ export function JobList({
                 <td className="job-status-cell">
                   <StatusBadge status={job.status} />
                   {!!job.warnings?.length && (
-                    <span className="text-xs" title={job.warnings.join('\n')}>{t('job.warnings')} ({job.warnings.length})</span>
+                    <span className="text-xs" title={job.warnings.join('\n')}>
+                      {t('job.warnings')} ({job.warnings.length})
+                    </span>
                   )}
                 </td>
                 <td
@@ -812,20 +880,7 @@ export function JobList({
                       title={t('job.cancel')}
                       aria-label={t('job.cancelNamed', { name })}
                     >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="15" y1="9" x2="9" y2="15"></line>
-                        <line x1="9" y1="9" x2="15" y2="15"></line>
-                      </svg>
+                      <XCircle size={14} />
                     </button>
                   ) : (
                     <button
@@ -906,6 +961,44 @@ export function BatchPanel({
           </article>
         ))}
       </div>
+    </div>
+  );
+}
+
+export function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: ReadonlyArray<readonly [string, string]>;
+  onChange: (value: string) => void;
+}) {
+  const id = React.useId();
+  return (
+    <div className="form-group">
+      <label className="form-label" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        id={id}
+        className="form-input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {!options.some(([optionValue]) => optionValue === value) && (
+          <option value={value} disabled>
+            {value.toUpperCase()}
+          </option>
+        )}
+        {options.map(([optionValue, text]) => (
+          <option value={optionValue} key={optionValue}>
+            {text}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

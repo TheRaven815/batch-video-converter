@@ -1,20 +1,7 @@
 import type { AudioExport, ExportSettings, SubtitleExport, VideoExport } from '../models';
 
-export const allowedExtensions = new Set([
-  'mp4',
-  'mov',
-  'mkv',
-  'avi',
-  'webm',
-  'm4v',
-  'mpg',
-  'mpeg',
-]);
 export const pollMs = 5000;
 export const presetStorageKey = 'video-converter-presets-v1';
-
-export type AppPage = 'dashboard' | 'convert' | 'presets' | 'settings';
-export type DashboardView = 'queue' | 'history' | 'outputs' | 'advanced';
 
 export type LocalPreset = {
   id: string;
@@ -38,9 +25,9 @@ export const defaultSettings: ExportSettings = {
   audio_export: 'copy',
   subtitle_export: 'none',
   subtitle_language: '',
-  quality_crf: 23,
+  quality_crf: null,
   target_video_bitrate: '',
-  audio_bitrate_kbps: 128,
+  audio_bitrate_kbps: null,
   resolution: 'original',
   encoder_preset: 'veryfast',
   hardware_acceleration: 'auto',
@@ -50,16 +37,19 @@ export const defaultSettings: ExportSettings = {
   subtitle_stream_indexes: null,
   audio_channel_mode: 'preserve',
   skip_existing_output: false,
-  audioStreamIndexes: null,
-  subtitleStreamIndexes: null,
-  audioChannelMode: 'preserve',
-  skipExistingOutput: false,
 };
 
 export function loadStoredPresets(): LocalPreset[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(presetStorageKey) || '[]') as LocalPreset[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((preset) => preset && typeof preset === 'object')
+      .map((preset) => ({
+        ...preset,
+        description: preset.description ?? '',
+        settings: { ...defaultSettings, ...(preset.settings ?? {}) },
+      }));
   } catch {
     return [];
   }

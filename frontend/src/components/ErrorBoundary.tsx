@@ -6,7 +6,7 @@ type State = { error: Error | null };
 function ErrorFallback() {
   const { t } = useI18n();
   return (
-    <main className="login-shell">
+    <main className="login-wrapper">
       <section className="login-card" role="alert">
         <h1 className="text-lg font-semibold text-zinc-50">{t('errorBoundary.title')}</h1>
         <p className="text-sm text-zinc-400">{t('errorBoundary.body')}</p>

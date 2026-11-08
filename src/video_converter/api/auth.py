@@ -8,15 +8,16 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from inspect import isawaitable
 from typing import Annotated, Any
 
 import bcrypt
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from video_converter.api.audit import write_audit_event
+from video_converter.api.common import maybe_await
 from video_converter.core.config import Settings, get_settings
 from video_converter.core.models import StructuredErrorResponse
 
@@ -39,8 +40,6 @@ def _append_security_audit(actor: str, action: str, target: str) -> None:
     logs_dir = getattr(configured, "logs_dir", None)
     if logs_dir is None:
         return
-    path = logs_dir / "audit.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
     event = {
         "at": datetime.now(timezone.utc).isoformat(),
         "actor": actor,
@@ -48,8 +47,7 @@ def _append_security_audit(actor: str, action: str, target: str) -> None:
         "target": target,
         "details": {},
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_audit_event(logs_dir, event)
 
 
 INVALID_CREDENTIALS_MESSAGE = "Invalid username or password"
@@ -64,7 +62,9 @@ AUTH_CREDENTIALS_KEY = "auth:credentials"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 12
 STREAM_TICKET_AUDIENCE = "stream"
-STREAM_TICKET_EXPIRE_SECONDS = 60
+# Media playback seeks after the first minute, so the ticket must outlive a
+# normal viewing session while still bounding replay of a leaked URL.
+STREAM_TICKET_EXPIRE_SECONDS = 3600
 
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW_SECONDS = 300
@@ -85,7 +85,7 @@ def get_storage() -> Any:
 
 
 async def _maybe_await(value):
-    return await value if isawaitable(value) else value
+    return await maybe_await(value)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +134,7 @@ async def get_active_credentials() -> dict | None:
             data = json.loads(raw)
             if "username" in data and "password_hash" in data:
                 data.setdefault("credentials_updated_at", 0)
+                data.setdefault("credentials_version", 0)
                 return data
         except json.JSONDecodeError:
             pass
@@ -143,6 +144,7 @@ async def get_active_credentials() -> dict | None:
             "username": settings.app_username,
             "password_hash": _legacy_hash(settings.app_password),
             "credentials_updated_at": 0,
+            "credentials_version": 0,
         }
 
     return None
@@ -154,6 +156,22 @@ async def get_active_credentials() -> dict | None:
 
 _login_failures: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
+LOGIN_MAX_TRACKED_CLIENTS = 1024
+
+
+def _prune_login_failures(now: float) -> None:
+    """Drop empty/expired entries so distributed guesses cannot leak memory."""
+    for key in list(_login_failures):
+        fresh = [t for t in _login_failures[key] if now - t < LOGIN_WINDOW_SECONDS]
+        if fresh:
+            _login_failures[key] = fresh
+        else:
+            _login_failures.pop(key, None)
+
+    overflow = len(_login_failures) - LOGIN_MAX_TRACKED_CLIENTS
+    if overflow > 0:
+        for key in list(_login_failures)[:overflow]:
+            _login_failures.pop(key, None)
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -164,6 +182,7 @@ def _rate_limit_key(request: Request) -> str:
 def _check_rate_limit(key: str) -> None:
     now = time.monotonic()
     with _login_lock:
+        _prune_login_failures(now)
         failures = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
         _login_failures[key] = failures
         if len(failures) >= LOGIN_MAX_FAILURES:
@@ -176,8 +195,11 @@ def _check_rate_limit(key: str) -> None:
 
 
 def _record_login_failure(key: str) -> None:
+    now = time.monotonic()
     with _login_lock:
-        _login_failures.setdefault(key, []).append(time.monotonic())
+        _prune_login_failures(now)
+        _login_failures.setdefault(key, []).append(now)
+        _prune_login_failures(now)
 
 
 def _reset_login_failures(key: str) -> None:
@@ -251,6 +273,10 @@ async def _validate_token(token: str | None, *, audience: str | None = None) -> 
         if issued_at < rotated_at:
             # Token predates the last credentials change — treat as revoked.
             raise credentials_exception
+        if int(payload.get("ver", -1)) != int(creds.get("credentials_version", 0)):
+            # Monotonic credential generation: tokens issued in the same
+            # second as a password change are still revoked.
+            raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception from None
 
@@ -287,7 +313,22 @@ class SetupStatus(BaseModel):
 
 class SetupRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("username")
+    @classmethod
+    def _validate_username(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Username must not be blank")
+        return normalized
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be at most 72 bytes")
+        return value
 
 
 _setup_lock = asyncio.Lock()
@@ -319,13 +360,26 @@ async def initial_setup(req: SetupRequest) -> Token:
             raise HTTPException(status_code=409, detail="Setup has already been completed")
         new_creds = {
             "username": username,
-            "password_hash": hash_password(req.password),
+            "password_hash": await asyncio.to_thread(hash_password, req.password),
             "credentials_updated_at": 0,
+            "credentials_version": 0,
         }
-        await _maybe_await(get_storage().set(AUTH_CREDENTIALS_KEY, json.dumps(new_creds)))
+        try:
+            created = await _maybe_await(
+                get_storage().set(AUTH_CREDENTIALS_KEY, json.dumps(new_creds), nx=True)
+            )
+        except TypeError:
+            # Backwards-compatible shim for storages without SET NX support.
+            created = await _maybe_await(
+                get_storage().set(AUTH_CREDENTIALS_KEY, json.dumps(new_creds))
+            )
+        if not created:
+            raise HTTPException(status_code=409, detail="Setup has already been completed")
 
     logger.info("first-run setup completed; admin account created")
-    access_token = create_access_token(data={"sub": username})
+    access_token = create_access_token(
+        data={"sub": username, "ver": new_creds["credentials_version"]}
+    )
     return Token(access_token=access_token, token_type="bearer")
 
 
@@ -342,7 +396,9 @@ async def _issue_login_token(request: Request, form_data: OAuth2PasswordRequestF
     username_ok = secrets.compare_digest(
         form_data.username.encode(), str(creds["username"]).encode()
     )
-    password_ok = verify_password(form_data.password, str(creds["password_hash"]))
+    password_ok = await asyncio.to_thread(
+        verify_password, form_data.password, str(creds["password_hash"])
+    )
     if not (username_ok and password_ok):
         _record_login_failure(key)
         raise HTTPException(
@@ -355,13 +411,27 @@ async def _issue_login_token(request: Request, form_data: OAuth2PasswordRequestF
 
     # Upgrade stored legacy SHA-256 hashes to bcrypt on successful login.
     storage = get_storage()
-    if await _maybe_await(storage.get(AUTH_CREDENTIALS_KEY)) and not str(
-        creds["password_hash"]
-    ).startswith("$2"):
-        upgraded = {**creds, "password_hash": hash_password(form_data.password)}
-        await _maybe_await(storage.set(AUTH_CREDENTIALS_KEY, json.dumps(upgraded)))
+    raw_credentials = await _maybe_await(storage.get(AUTH_CREDENTIALS_KEY))
+    if raw_credentials and not str(creds["password_hash"]).startswith("$2"):
+        upgraded = {
+            **creds,
+            "password_hash": await asyncio.to_thread(hash_password, form_data.password),
+        }
+        compare_and_set = getattr(storage, "compare_and_set", None)
+        if compare_and_set is not None:
+            await _maybe_await(
+                compare_and_set(
+                    AUTH_CREDENTIALS_KEY,
+                    str(raw_credentials),
+                    json.dumps(upgraded),
+                )
+            )
+        else:
+            await _maybe_await(storage.set(AUTH_CREDENTIALS_KEY, json.dumps(upgraded)))
 
-    access_token = create_access_token(data={"sub": creds["username"]})
+    access_token = create_access_token(
+        data={"sub": creds["username"], "ver": creds.get("credentials_version", 0)}
+    )
     return Token(access_token=access_token, token_type="bearer")
 
 
@@ -383,17 +453,36 @@ async def token_alias(
 async def issue_stream_ticket(
     current_user: Annotated[str, Depends(get_current_user)],
 ) -> StreamTicket:
+    creds = await get_active_credentials()
+    version = int((creds or {}).get("credentials_version", 0))
     ticket = create_access_token(
-        data={"sub": current_user, "aud": STREAM_TICKET_AUDIENCE},
+        data={"sub": current_user, "aud": STREAM_TICKET_AUDIENCE, "ver": version},
         expires_delta=timedelta(seconds=STREAM_TICKET_EXPIRE_SECONDS),
     )
     return StreamTicket(ticket=ticket, expires_in=STREAM_TICKET_EXPIRE_SECONDS)
 
 
 class CredentialsUpdateRequest(BaseModel):
-    current_password: str
-    new_username: str | None = None
-    new_password: str | None = None
+    current_password: str = Field(min_length=1, max_length=72)
+    new_username: str | None = Field(default=None, min_length=3, max_length=64)
+    new_password: str | None = Field(default=None, min_length=8, max_length=72)
+
+    @field_validator("new_username")
+    @classmethod
+    def _validate_new_username(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Username must not be blank")
+        return normalized
+
+    @field_validator("new_password")
+    @classmethod
+    def _validate_new_password(cls, value: str | None) -> str | None:
+        if value is not None and len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be at most 72 bytes")
+        return value
 
 
 @router.put("/credentials")
@@ -405,7 +494,9 @@ async def update_credentials(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AUTH_NOT_CONFIGURED_MESSAGE
         )
-    if not verify_password(req.current_password, str(creds["password_hash"])):
+    if not await asyncio.to_thread(
+        verify_password, req.current_password, str(creds["password_hash"])
+    ):
         raise HTTPException(status_code=400, detail="Invalid current password")
 
     if not req.new_username and not req.new_password:
@@ -414,10 +505,13 @@ async def update_credentials(
     new_creds = {
         "username": req.new_username if req.new_username else creds["username"],
         "password_hash": (
-            hash_password(req.new_password) if req.new_password else creds["password_hash"]
+            await asyncio.to_thread(hash_password, req.new_password)
+            if req.new_password
+            else creds["password_hash"]
         ),
-        # Revokes every token issued before this moment (see _validate_token).
-        "credentials_updated_at": int(time.time()),
+        "credentials_updated_at": time.time(),
+        # Monotonic generation increments even within the same wall-clock second.
+        "credentials_version": int(creds.get("credentials_version", 0)) + 1,
     }
     await _maybe_await(get_storage().set(AUTH_CREDENTIALS_KEY, json.dumps(new_creds)))
     await asyncio.to_thread(

@@ -13,54 +13,7 @@ import video_converter.api.main as api
 from video_converter.core.config import MediaRoot
 from video_converter.core.job_repository import JobRepository
 
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.lists: dict[str, list[str]] = {}
-        self.sets: dict[str, set[str]] = {}
-
-    def ping(self) -> bool:
-        return True
-
-    def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    def set(
-        self, key: str, value: str, ex: int | None = None, nx: bool = False
-    ) -> bool:  # noqa: ARG002
-        if nx and key in self.values:
-            return False
-        self.values[key] = value
-        return True
-
-    def delete(self, key: str) -> int:
-        return 1 if self.values.pop(key, None) is not None else 0
-
-    def pipeline(self, transaction: bool = True):  # noqa: ARG002
-        class _P:
-            def __init__(self, outer: _FakeRedis) -> None:
-                self.outer = outer
-                self.cmds: list[tuple[str, tuple]] = []
-
-            def set(self, *a, **kw):  # type: ignore[no-untyped-def]
-                self.cmds.append(("set", a))
-                return self
-
-            def rpush(self, *a, **kw):  # type: ignore[no-untyped-def]
-                self.cmds.append(("rpush", a))
-                return self
-
-            def execute(self):  # type: ignore[no-untyped-def]
-                res: list = []
-                for name, args in self.cmds:
-                    res.append(getattr(self.outer, name)(*args))
-                return res
-
-        return _P(self)
-
-    def publish(self, *a, **kw) -> int:  # noqa: ARG002
-        return 0
+from support import FakeRedis as _FakeRedis
 
 
 def _make_client(tmp_path: Path, monkeypatch) -> tuple[TestClient, Path]:

@@ -9,32 +9,11 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from video_converter.api.auth import get_current_user
+from video_converter.api.common import VIDEO_EXTENSIONS, runtime_media_roots_map
 from video_converter.core.models import Mp4FixRequest, Mp4FixResponse
 from video_converter.core.path_validation import validate_source_path
 
 router = APIRouter()
-
-VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".mov",
-    ".mkv",
-    ".avi",
-    ".webm",
-    ".m4v",
-    ".mpg",
-    ".mpeg",
-}
-
-
-def _build_media_roots_map() -> dict[str, object]:
-    from video_converter.api import routes as routes_module
-
-    cfg = getattr(routes_module, "settings", None)
-    if cfg is None or not hasattr(cfg, "media_roots"):
-        from video_converter.core.config import get_settings
-
-        cfg = get_settings()
-    return {root.key: root for root in cfg.media_roots}  # type: ignore[attr-defined]
 
 
 def _resolve_input_path(payload: Mp4FixRequest) -> Path:
@@ -56,7 +35,7 @@ def _resolve_input_path(payload: Mp4FixRequest) -> Path:
             )
         try:
             return validate_source_path(
-                _build_media_roots_map(),
+                runtime_media_roots_map(),
                 payload.source_root_key or "",
                 payload.source_path or "",
                 supported_extensions=VIDEO_EXTENSIONS,
@@ -98,7 +77,7 @@ async def mp4_fix(payload: Mp4FixRequest, request: Request) -> Mp4FixResponse:
 
     from video_converter.api import routes as routes_module
     from video_converter.core.config import get_settings
-    from video_converter.worker.main import fix_mp4
+    from video_converter.worker.mp4_fix import fix_mp4
 
     cfg = getattr(routes_module, "settings", None) or get_settings()
     cancel_event = threading.Event()
@@ -141,5 +120,5 @@ async def mp4_fix(payload: Mp4FixRequest, request: Request) -> Mp4FixResponse:
         filename=output_path.name,
         download_url=f"/api/v1/outputs/{quote(output_path.name, safe='')}/download",
         source_path=payload.source_path,
-        message="Onarılmış MP4 kopyası oluşturuldu. Kaynak dosya değiştirilmedi.",
+        message="Repaired MP4 copy created; source file unchanged.",
     )

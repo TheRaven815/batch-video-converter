@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 import video_converter.api.main as api
 import video_converter.api.routes as routes
+from video_converter.api.routers import jobs as jobs_router
 from video_converter.core.models import JobCreateRequest, JobRecord, JobStatus, now_iso
 
 
@@ -115,7 +116,7 @@ def test_sse_emits_initial_snapshot_then_pubsub_delta(monkeypatch: pytest.Monkey
     async def exercise() -> tuple[str, str]:
         monkeypatch.setattr(routes, "job_repository", Repository(), raising=False)
         monkeypatch.setattr(routes, "storage_client", Storage(), raising=False)
-        response = await routes.stream_jobs(Request())  # type: ignore[arg-type]
+        response = await jobs_router.stream_jobs(Request())  # type: ignore[arg-type]
         iterator = response.body_iterator
         snapshot = await anext(iterator)
         update = await anext(iterator)

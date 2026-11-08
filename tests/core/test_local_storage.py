@@ -24,6 +24,72 @@ def test_local_file_store_persists_values_and_lists_across_instances(tmp_path) -
     assert second.llen("jobs:queue") == 2
 
 
+def test_local_file_store_mget_skips_missing_and_expired_keys(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+    store.set("a", "1")
+    store.set("b", "2")
+    store.set("expired", "3", ex=1)
+    store._conn.execute("UPDATE kv SET expires_at = ? WHERE key = 'expired'", (time.time() - 5,))
+
+    assert store.mget(["a", "missing", "b"]) == ["1", None, "2"]
+    assert store.mget(["expired"]) == [None]
+    assert store.mget([]) == []
+
+
+def test_local_file_store_prunes_expired_kv_rows_on_write(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+    store.set("old", "x", ex=1)
+    store._conn.execute(
+        "UPDATE kv SET expires_at = ? WHERE key = 'old'", (time.time() - 5,)
+    )
+    store._next_expiry_prune = 0
+
+    store.set("new", "y")
+
+    remaining = store._conn.execute("SELECT key FROM kv ORDER BY key").fetchall()
+    assert [row[0] for row in remaining] == ["new"]
+
+
+def test_local_file_store_tracks_list_lengths_without_count_per_push(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+
+    assert store.rpush("q", "a") == 1
+    assert store.lpush("q", "b") == 2
+    assert store.llen("q") == 2
+    assert store.lrem("q", 1, "a") == 1
+    assert store.rpush("q", "c") == 2
+
+    row = store._conn.execute(
+        "SELECT length FROM list_lengths WHERE key = 'q'"
+    ).fetchone()
+    assert row is not None and int(row[0]) == 2
+    assert store.lrange("q", 0, -1) == ["b", "c"]
+
+
+def test_local_file_store_backfills_length_for_legacy_list_rows(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+    store._conn.executemany(
+        "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+        [("legacy", 0, "a"), ("legacy", 1, "b")],
+    )
+
+    assert store.llen("legacy") == 2
+    assert store.rpush("legacy", "c") == 3
+    assert store.lrange("legacy", 0, -1) == ["a", "b", "c"]
+
+
+def test_local_file_store_blmove_keeps_both_lengths(tmp_path) -> None:
+    store = LocalFileStore(tmp_path / "queue.sqlite3")
+    store.rpush("source", "job-1")
+    store.rpush("source", "job-2")
+
+    assert store.blmove("source", "target", timeout=1) == "job-1"
+    assert store.llen("source") == 1
+    assert store.llen("target") == 1
+    assert store.blpop("target", timeout=1) == ("target", "job-1")
+    assert store.llen("target") == 0
+
+
 def test_local_file_store_pipeline_and_blpop(tmp_path) -> None:
     store = LocalFileStore(tmp_path / "queue.sqlite3")
     pipe = store.pipeline(transaction=True)

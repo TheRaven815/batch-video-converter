@@ -37,7 +37,7 @@ import {
 } from './api';
 import { ConfirmDialog, HealthPill } from './components/ui';
 import { LoginPage } from './components/LoginPage';
-import { AppProvider, type ToastKind } from './context/AppContext';
+import { AppProvider, type AppContextValue, type ToastKind } from './context/AppContext';
 import { useServerState } from './hooks/useServerState';
 import type {
   ExportSettings,
@@ -45,6 +45,7 @@ import type {
   JobStatus,
   MediaBrowseEntryDto,
   StagedServerFile,
+  SystemSettings,
 } from './models';
 import {
   defaultSettings,
@@ -89,13 +90,39 @@ function initialJobFilters(): JobFilters {
     sourceType: ['server', 'legacy'].includes(source ?? '')
       ? (source as JobFilters['sourceType'])
       : 'all',
+    includeArchived: params.get('archived') === '1',
   };
+}
+
+function applyStoredExportDefaults(
+  current: ExportSettings,
+  stored: SystemSettings,
+): ExportSettings {
+  const defaults = stored.default_export;
+  const next: ExportSettings = { ...current };
+  if (defaults.video_export) next.video_export = defaults.video_export;
+  if (defaults.audio_export) next.audio_export = defaults.audio_export;
+  if (defaults.subtitle_export) next.subtitle_export = defaults.subtitle_export;
+  if (defaults.subtitle_language) next.subtitle_language = defaults.subtitle_language;
+  if (defaults.quality_crf !== null && defaults.quality_crf !== undefined) {
+    next.quality_crf = defaults.quality_crf;
+  }
+  if (defaults.target_video_bitrate) next.target_video_bitrate = defaults.target_video_bitrate;
+  if (defaults.audio_bitrate_kbps !== null && defaults.audio_bitrate_kbps !== undefined) {
+    next.audio_bitrate_kbps = defaults.audio_bitrate_kbps;
+  }
+  if (defaults.resolution) next.resolution = defaults.resolution;
+  if (defaults.encoder_preset) next.encoder_preset = defaults.encoder_preset;
+  if (defaults.hardware_acceleration) next.hardware_acceleration = defaults.hardware_acceleration;
+  if (stored.retry?.max_attempts) next.max_attempts = stored.retry.max_attempts;
+  return next;
 }
 
 export function App() {
   const { language, t, toggleLanguage } = useI18n();
   const [isAuthenticated, setIsAuthenticated] = useState(Boolean(getAuthToken()));
-  const server = useServerState(isAuthenticated);
+  const [filters, setFilters] = useState<JobFilters>(initialJobFilters);
+  const server = useServerState(isAuthenticated, filters);
   const [location, navigate] = useLocation();
 
   const [selectedRootKey, setSelectedRootKey] = useState('');
@@ -107,7 +134,6 @@ export function App() {
   const [browserLoading, setBrowserLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
-  const [filters, setFilters] = useState<JobFilters>(initialJobFilters);
   const [settings, setSettings] = useState<ExportSettings>(defaultSettings);
   const [presetSettings, setPresetSettings] = useState<ExportSettings>(defaultSettings);
   const [presets, setPresets] = useState<LocalPreset[]>(loadStoredPresets);
@@ -150,15 +176,15 @@ export function App() {
 
   useEffect(() => {
     setSelectedJobIds((current) => {
-      const validIds = new Set(server.jobs.map((job) => job.id));
+      const validIds = new Set(server.allJobs.map((job) => job.id));
       const next = new Set([...current].filter((id) => validIds.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [server.jobs]);
+  }, [server.allJobs]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    void getSystemSettings().then((stored) => {
+    const applyStoredSettings = (stored: SystemSettings) => {
       const theme = stored.ui.theme;
       const resolved =
         theme === 'system'
@@ -168,7 +194,17 @@ export function App() {
           : theme;
       document.documentElement.dataset.theme = resolved;
       document.documentElement.dataset.density = stored.ui.density;
-    });
+      setSettings((current) => applyStoredExportDefaults(current, stored));
+      setPresetSettings((current) => applyStoredExportDefaults(current, stored));
+    };
+
+    void getSystemSettings().then(applyStoredSettings);
+    const onSettingsUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<SystemSettings>).detail;
+      if (detail) applyStoredSettings(detail);
+    };
+    window.addEventListener('video-converter:settings-updated', onSettingsUpdated);
+    return () => window.removeEventListener('video-converter:settings-updated', onSettingsUpdated);
   }, [isAuthenticated]);
 
   useEffect(() => {
@@ -179,6 +215,7 @@ export function App() {
       if (filters.sort !== 'newest') params.set('sort', filters.sort);
       if (filters.profile) params.set('profile', filters.profile);
       if (filters.sourceType !== 'all') params.set('source', filters.sourceType);
+      if (filters.includeArchived) params.set('archived', '1');
       const query = params.toString();
       const hashPath = window.location.hash.split('?')[0] || '#/dashboard';
       window.history.replaceState(
@@ -214,19 +251,19 @@ export function App() {
 
   const summary = useMemo(() => {
     const counts: Record<JobStatus | 'all', number> = {
-      all: server.jobs.length,
+      all: server.allJobs.length,
       queued: 0,
       running: 0,
       cancelled: 0,
       completed: 0,
       failed: 0,
     };
-    server.jobs.forEach((job) => {
+    server.allJobs.forEach((job) => {
       const status = normalizeStatus(job.status);
       counts[status] += 1;
     });
     return counts;
-  }, [server.jobs]);
+  }, [server.allJobs]);
 
   const executeBulkAction = useCallback(
     async (action: 'cancel' | 'start' | 'archive' | 'delete', ids: string[]) => {
@@ -407,11 +444,10 @@ export function App() {
         hardware_acceleration: settings.hardware_acceleration,
         max_attempts: settings.max_attempts,
         priority: settings.priority,
-        audio_stream_indexes: settings.audio_stream_indexes ?? settings.audioStreamIndexes ?? null,
-        subtitle_stream_indexes:
-          settings.subtitle_stream_indexes ?? settings.subtitleStreamIndexes ?? null,
-        audio_channel_mode: settings.audio_channel_mode ?? settings.audioChannelMode ?? 'preserve',
-        skip_existing_output: settings.skip_existing_output ?? settings.skipExistingOutput ?? false,
+        audio_stream_indexes: settings.audio_stream_indexes ?? null,
+        subtitle_stream_indexes: settings.subtitle_stream_indexes ?? null,
+        audio_channel_mode: settings.audio_channel_mode ?? 'preserve',
+        skip_existing_output: settings.skip_existing_output ?? false,
       }));
       const validation = await validateJobs(payload);
       if (validation.invalid_count) {
@@ -502,63 +538,99 @@ export function App() {
     [editingPresetId, persistPresets, presets, resetPresetForm],
   );
 
+  const contextValue = useMemo<AppContextValue>(
+    () => ({
+      roots: server.roots,
+      selectedRootKey,
+      setSelectedRootKey,
+      currentPath,
+      browserQuery,
+      setBrowserQuery,
+      entries,
+      selectedPaths,
+      setSelectedPaths,
+      staged,
+      setStaged,
+      browserLoading,
+      openPath,
+      settings,
+      setSettings,
+      submitting,
+      submitBatch,
+      jobs: server.jobs,
+      filteredJobs,
+      jobsLoading: server.jobsLoading,
+      selectedJobIds,
+      setSelectedJobIds,
+      filters,
+      setFilters,
+      summary,
+      outputs: server.outputs,
+      batches: server.batches,
+      workerHealth: server.workerHealth,
+      hasNextJobs: Boolean(server.hasNextJobs),
+      hasNextOutputs: Boolean(server.hasNextOutputs),
+      loadMoreJobs: () => void server.fetchNextJobs(),
+      loadMoreOutputs: () => void server.fetchNextOutputs(),
+      runBulkAction,
+      handleCancelJob,
+      handleDeleteJob,
+      handleClearOutputs,
+      handleDeleteOutput,
+      runBatchAction,
+      showToast,
+      presets,
+      editingPresetId,
+      presetName,
+      setPresetName,
+      presetDescription,
+      setPresetDescription,
+      presetSettings,
+      setPresetSettings,
+      resetPresetForm,
+      savePreset,
+      startEditPreset,
+      deletePreset,
+    }),
+    [
+      server,
+      selectedRootKey,
+      currentPath,
+      browserQuery,
+      entries,
+      selectedPaths,
+      staged,
+      browserLoading,
+      openPath,
+      settings,
+      submitting,
+      submitBatch,
+      filteredJobs,
+      selectedJobIds,
+      filters,
+      summary,
+      runBulkAction,
+      handleCancelJob,
+      handleDeleteJob,
+      handleClearOutputs,
+      handleDeleteOutput,
+      runBatchAction,
+      showToast,
+      presets,
+      editingPresetId,
+      presetName,
+      presetDescription,
+      presetSettings,
+      resetPresetForm,
+      savePreset,
+      startEditPreset,
+      deletePreset,
+    ],
+  );
+
   if (!isAuthenticated) {
     return <LoginPage onLogin={() => setIsAuthenticated(true)} />;
   }
-
-  const contextValue = {
-    roots: server.roots,
-    selectedRootKey,
-    setSelectedRootKey,
-    currentPath,
-    browserQuery,
-    setBrowserQuery,
-    entries,
-    selectedPaths,
-    setSelectedPaths,
-    staged,
-    setStaged,
-    browserLoading,
-    openPath,
-    settings,
-    setSettings,
-    submitting,
-    submitBatch,
-    jobs: server.jobs,
-    filteredJobs,
-    jobsLoading: server.jobsLoading,
-    selectedJobIds,
-    setSelectedJobIds,
-    filters,
-    setFilters,
-    summary,
-    outputs: server.outputs,
-    batches: server.batches,
-    workerHealth: server.workerHealth,
-    hasNextJobs: Boolean(server.hasNextJobs),
-    hasNextOutputs: Boolean(server.hasNextOutputs),
-    loadMoreJobs: () => void server.fetchNextJobs(),
-    loadMoreOutputs: () => void server.fetchNextOutputs(),
-    runBulkAction,
-    handleCancelJob,
-    handleDeleteJob,
-    handleClearOutputs,
-    handleDeleteOutput,
-    runBatchAction,
-    showToast,
-    presets,
-    editingPresetId,
-    presetName,
-    setPresetName,
-    presetDescription,
-    setPresetDescription,
-    presetSettings,
-    setPresetSettings,
-    resetPresetForm,
-    savePreset,
-    startEditPreset,
-    deletePreset,
-  };
 
   return (
     <AppProvider value={contextValue}>

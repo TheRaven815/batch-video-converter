@@ -1,49 +1,78 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import time
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from video_converter.api.auth import get_current_user
-from video_converter.api.routers._select import select_routes
-from video_converter.core.models import MediaStreamEntryDto, MediaStreamsProbeResponse
+from video_converter.api.common import VIDEO_EXTENSIONS, runtime_media_roots_map
+from video_converter.api.errors import path_validation_error
+from video_converter.api.runtime import settings
+from video_converter.api.routes import _collect_browse_entries, _store_subtitle_probe
+from video_converter.core.models import (
+    MediaBrowseResponse,
+    MediaRootDto,
+    MediaStreamEntryDto,
+    MediaStreamsProbeResponse,
+    MediaSubtitleProbeResponse,
+    MediaSubtitleTrackDto,
+)
 from video_converter.core.path_validation import SourcePathTraversalError
 from video_converter.core.path_validation import validate_source_path as _validate_source_path
 
-router = select_routes(lambda path: path.startswith("/api/v1/media"))
+router = APIRouter()
 
 # ---------------------------------------------------------------------------
 # New: GET /api/v1/media/streams — ffprobe all streams (video/audio/subtitle)
 # ---------------------------------------------------------------------------
 
-VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".mov",
-    ".mkv",
-    ".avi",
-    ".webm",
-    ".m4v",
-    ".mpg",
-    ".mpeg",
-}
-
 _STREAMS_CACHE_TTL_SECONDS = 60
-_streams_probe_cache: dict[tuple[str, str], tuple[float, MediaStreamsProbeResponse]] = {}
+_STREAMS_CACHE_MAX_ENTRIES = 512
+# (expiry, source mtime_ns, source size, response)
+_streams_probe_cache: dict[
+    tuple[str, str], tuple[float, int, int, MediaStreamsProbeResponse]
+] = {}
 
 
-def _build_media_roots_map() -> dict[str, object]:
-    # Lazy import to avoid circular import at module load time.
-    from video_converter.api import routes as routes_module
+def _cached_streams_probe(
+    cache_key: tuple[str, str], mtime_ns: int, size: int
+) -> MediaStreamsProbeResponse | None:
+    cached = _streams_probe_cache.get(cache_key)
+    if cached is None:
+        return None
+    expiry, cached_mtime, cached_size, result = cached
+    if (
+        expiry <= time.monotonic()
+        or cached_mtime != mtime_ns
+        or cached_size != size
+    ):
+        _streams_probe_cache.pop(cache_key, None)
+        return None
+    return result
 
-    cfg = getattr(routes_module, "settings", None)
-    if cfg is None or not hasattr(cfg, "media_roots"):
-        from video_converter.core.config import get_settings
 
-        cfg = get_settings()
-    return {root.key: root for root in cfg.media_roots}  # type: ignore[attr-defined]
+def _store_streams_probe(
+    cache_key: tuple[str, str],
+    mtime_ns: int,
+    size: int,
+    result: MediaStreamsProbeResponse,
+) -> None:
+    now = time.monotonic()
+    if len(_streams_probe_cache) >= _STREAMS_CACHE_MAX_ENTRIES:
+        for key in [key for key, value in _streams_probe_cache.items() if value[0] <= now]:
+            _streams_probe_cache.pop(key, None)
+        while len(_streams_probe_cache) >= _STREAMS_CACHE_MAX_ENTRIES:
+            _streams_probe_cache.pop(next(iter(_streams_probe_cache)))
+    _streams_probe_cache[cache_key] = (
+        now + _STREAMS_CACHE_TTL_SECONDS,
+        mtime_ns,
+        size,
+        result,
+    )
 
 
 @router.get(
@@ -55,7 +84,7 @@ async def probe_media_streams(
     root_key: Annotated[str, Query(min_length=1, max_length=64)],
     path: Annotated[str, Query(min_length=1, max_length=2048)],
 ) -> MediaStreamsProbeResponse:
-    roots_map = _build_media_roots_map()
+    roots_map = runtime_media_roots_map()
 
     root_obj = roots_map.get(root_key)
     if root_obj is None:
@@ -86,12 +115,16 @@ async def probe_media_streams(
 
     root_path = Path(str(root_path)).resolve()  # type: ignore[arg-type]
     normalized_path = resolved.relative_to(root_path).as_posix()
+    try:
+        source_stat = resolved.stat()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    mtime_ns = source_stat.st_mtime_ns
+    source_size = source_stat.st_size
     cache_key = (str(root_key), normalized_path)
-    cached = _streams_probe_cache.get(cache_key)
-    if cached and cached[0] > time.monotonic():
-        return cached[1]
-    if cached:
-        del _streams_probe_cache[cache_key]
+    cached_result = _cached_streams_probe(cache_key, mtime_ns, source_size)
+    if cached_result is not None:
+        return cached_result
 
     # Run ffprobe (single invocation for all stream types)
     ffprobe_cmd = [
@@ -105,7 +138,8 @@ async def probe_media_streams(
         str(resolved),
     ]
     try:
-        proc = subprocess.run(
+        proc = await asyncio.to_thread(
+            subprocess.run,
             ffprobe_cmd,
             capture_output=True,
             text=True,
@@ -176,5 +210,97 @@ async def probe_media_streams(
         audio=audio,
         subtitle=subtitle,
     )
-    _streams_probe_cache[cache_key] = (time.monotonic() + _STREAMS_CACHE_TTL_SECONDS, result)
+    _store_streams_probe(cache_key, mtime_ns, source_size, result)
+    return result
+
+
+@router.get(
+    "/api/v1/media/roots",
+    response_model=list[MediaRootDto],
+    dependencies=[Depends(get_current_user)],
+)
+async def list_media_roots() -> list[MediaRootDto]:
+    return [MediaRootDto(key=root.key, label=root.label) for root in settings.media_roots]
+
+
+@router.get(
+    "/api/v1/media/browse",
+    response_model=MediaBrowseResponse,
+    dependencies=[Depends(get_current_user)],
+)
+async def browse_media_root(
+    root_key: Annotated[str, Query(min_length=1, max_length=64)],
+    path: Annotated[str, Query(max_length=2048)] = "",
+    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+    cursor: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> MediaBrowseResponse:
+    root_map = runtime_media_roots_map()
+    root = root_map.get(root_key)
+    if root is None:
+        raise HTTPException(status_code=404, detail="Media root not found")
+
+    target = (root.path / path).resolve()
+    try:
+        target.relative_to(root.path)
+    except ValueError as exc:
+        raise path_validation_error(
+            SourcePathTraversalError("Invalid path"), status_code=400
+        ) from exc
+
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    query = q.lower() if q else None
+    all_entries, normalized_current = await asyncio.to_thread(
+        _collect_browse_entries, root, target, query
+    )
+
+    entries = all_entries[cursor : cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < len(all_entries) else None
+    return MediaBrowseResponse(
+        root_key=root.key,
+        current_path=normalized_current,
+        entries=entries,
+        next_cursor=str(next_cursor) if next_cursor is not None else None,
+    )
+
+
+@router.get(
+    "/api/v1/media/subtitles",
+    response_model=MediaSubtitleProbeResponse,
+    dependencies=[Depends(get_current_user)],
+)
+async def probe_media_subtitles(
+    root_key: Annotated[str, Query(min_length=1, max_length=64)],
+    path: Annotated[str, Query(min_length=1, max_length=2048)],
+) -> MediaSubtitleProbeResponse:
+    # One shared ffprobe implementation serves both media probe endpoints;
+    # the subtitles view is just a projection of the full stream list.
+    probe = await probe_media_streams(root_key=root_key, path=path)
+    result = MediaSubtitleProbeResponse(
+        root_key=probe.root_key,
+        path=probe.path,
+        tracks=[
+            MediaSubtitleTrackDto(
+                index=entry.index,
+                language=(entry.language or "und"),
+                title=entry.title,
+                codec_name=entry.codec or None,
+            )
+            for entry in probe.subtitle
+        ],
+    )
+    root = runtime_media_roots_map().get(probe.root_key)
+    if root is not None:
+        try:
+            source_stat = (root.path / probe.path).stat()
+        except OSError:
+            return result
+        _store_subtitle_probe(
+            (probe.root_key, probe.path),
+            source_stat.st_mtime_ns,
+            source_stat.st_size,
+            result,
+        )
     return result

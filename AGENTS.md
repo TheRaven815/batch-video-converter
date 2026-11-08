@@ -15,19 +15,27 @@ Main capabilities:
 
 ## Architecture and Directories
 
-- `src/video_converter/api/main.py`: FastAPI application. API endpoints, source path validation, idempotent batch create, media browse/subtitle probe, job stream, output download, and static frontend serving live here.
+- `src/video_converter/api/main.py`: FastAPI app factory, lifespan/runtime binding, exception handlers, router mounting, and static frontend serving.
+- `src/video_converter/api/routers/`: Domain routers (`jobs`, `batches`, `outputs`, `media`, `health`, `settings`, `audit`, `tools`, `ui`). Endpoints live here, not in `routes.py`.
+- `src/video_converter/api/routes.py`: Shared route services and helpers: source validation, job record builders, idempotency, filters, artifact cleanup, output helpers, settings access.
+- `src/video_converter/api/runtime.py`: Runtime proxies so routers read the settings/storage/repository bound by the lifespan without duplicating globals.
+- `src/video_converter/api/common.py`, `api/audit.py`: Shared media constants/root maps and the locked rotating audit log.
 - `src/video_converter/worker/main.py`: Worker entry point. Pulls jobs from the queue, resolves input/output paths, normalizes export options, builds the FFmpeg command, reads progress, and updates job state.
 - `src/video_converter/core/config.py`: Environment variables, `Settings`, `MediaRoot`, `DATA_ROOT` subdirectories, `MEDIA_MOUNTS` parsing, and queue key constants.
 - `src/video_converter/core/models.py`: Pydantic API/job models and status enums. This is the source of truth for the backend contract.
-- `src/video_converter/core/job_repository.py`: Job persistence, enqueue, requeue, delete, status update, and stale running recovery operations over Redis/Local store.
+- `src/video_converter/core/job_repository_async.py`: Canonical async repository implementation shared by API and worker.
+- `src/video_converter/core/job_repository.py`: Synchronous worker facade over the canonical async repository.
+- `src/video_converter/core/job_repository_shared.py`: Shared record parsing, running-index, staleness, and bounded-list helpers.
 - `src/video_converter/core/path_validation.py`: Security layer that prevents escaping the configured root for `source_root_key + source_path` and checks file/extension validity.
 - `src/video_converter/core/storage.py`: `redis` backend or SQLite-based Redis-like `LocalFileStore` for local development.
 - `frontend/src/api.ts`: Frontend HTTP client functions.
 - `frontend/src/models.ts`: TypeScript API/model types; keep them synchronized with the backend Pydantic models.
-- `frontend/src/main.tsx`: Main React state/flow; media selection, staging, polling/SSE fallback, job refresh, batch submit, and preset logic.
+- `frontend/src/App.tsx`: Application shell, auth flow, layout, and cross-page actions.
+- `frontend/src/hooks/useServerState.ts`: React Query job/output/batch loading, SSE in-place updates, and polling fallback.
+- `frontend/src/context/AppContext.tsx` and `frontend/src/pages/`: Shared app context and route-level pages.
 - `frontend/src/components/ui.tsx`: Shared UI components.
 - `frontend/src/utils/constants.ts` and `frontend/src/utils/helpers.ts`: Constants, default export settings, filtering/sorting/format helpers.
-- `tests/`: pytest package split into `api`, `core`, and `worker` subgroups.
+- `tests/`: pytest package split into `api`, `core`, and `worker` subgroups; shared fakes live in `tests/support.py`.
 - `Dockerfile`, `docker-compose.yml`, `.env.example`: Unified local/Coolify/Raspberry Pi build and deployment contract.
 - `run_local.py`: Local launcher that starts the API and worker from the same terminal without Docker.
 
@@ -146,6 +154,9 @@ Paths in `MEDIA_MOUNTS` are paths inside the container, not host paths. These pa
 Important endpoints:
 
 - `GET /health/live`, `GET /health/ready`
+- `POST /api/v1/auth/setup`, `POST /api/v1/auth/login`, `POST /api/v1/auth/token`
+- `GET /api/v1/auth/setup-status`, `POST /api/v1/auth/credentials`
+- `POST /api/v1/auth/stream-ticket` (short-lived SSE ticket)
 - `POST /api/v1/jobs`
 - `POST /api/v1/jobs/validate`
 - `POST /api/v1/jobs/batch`
@@ -153,9 +164,13 @@ Important endpoints:
 - `GET /api/v1/batches`
 - `GET /api/v1/jobs/stream`
 - `GET /api/v1/jobs/{job_id}`
+- `GET /api/v1/jobs/{job_id}/log`
 - `GET /api/v1/worker/health`
 - `GET /api/v1/outputs`
 - `GET /api/v1/outputs/{filename}/download`
+- `GET /api/v1/outputs/{filename}/preview`
+- `GET /api/v1/outputs/{filename}/thumbnail`
+- `DELETE /api/v1/outputs/{filename}`, `DELETE /api/v1/outputs`
 - `POST /api/v1/jobs/{job_id}/cancel`
 - `POST /api/v1/jobs/bulk/cancel`
 - `POST /api/v1/jobs/bulk/start`
@@ -163,7 +178,12 @@ Important endpoints:
 - `POST /api/v1/jobs/bulk/delete`
 - `GET /api/v1/media/roots`
 - `GET /api/v1/media/browse`
+- `GET /api/v1/media/streams`
 - `GET /api/v1/media/subtitles`
+- `POST /api/v1/media/uploads`
+- `POST /api/v1/tools/mp4-fix`
+- `GET /api/v1/settings`, `POST /api/v1/settings`
+- `GET /api/v1/audit`
 
 When changing the API contract:
 
@@ -183,16 +203,16 @@ When changing the API contract:
 - `_resolve_export_options` normalizes video/audio/subtitle export fields. For a WebM target, the profile becomes `vp9_webm`; in WebM, `audio_export=copy` falls back to `opus` for stability.
 - Output files are written under `DATA_ROOT/outputs` in the form `input_stem.jobprefix.ext`.
 - FFmpeg progress information is reflected into `progress_percent`, `progress_phase`, `progress_message`, `progress_eta_seconds`, `progress_fps`, `progress_speed`, `progress_bitrate`, `log_tail`, and `timeline` fields.
-- On SIGTERM/SIGINT, graceful shutdown terminates active FFmpeg processes and tries to mark running jobs as failed.
-- If `WORKER_CONCURRENCY` is increased, test CPU/RAM, shared `/data` and media mount access, FFmpeg IO load, and Redis/local store behavior.
+- On SIGTERM/SIGINT, graceful shutdown terminates active FFmpeg processes and requeues running jobs as `queued` for the next worker start.
+- If `WORKER_CONCURRENCY` is increased, test CPU/RAM, shared `/app-data` and media mount access, FFmpeg IO load, and Redis/local store behavior.
 
 ## Frontend Notes
 
 - API call functions are centralized in `frontend/src/api.ts`; when adding a new endpoint, write a typed helper there.
 - TypeScript models in `frontend/src/models.ts` must stay synchronized with backend Pydantic models.
-- The main application manages stateful flows in `frontend/src/main.tsx`: media roots, browser entries, staging, export settings, jobs, outputs, batches, worker health, SSE/poll fallback, and local presets.
+- The main application manages stateful flows in `frontend/src/App.tsx`, `frontend/src/hooks/useServerState.ts`, and `frontend/src/context/AppContext.tsx`; page-level UI lives under `frontend/src/pages/`.
 - Prefer splitting UI components into `frontend/src/components/ui.tsx`; do not overload the main file with unnecessary JSX.
-- Fixed export options, allowed extensions, and polling intervals live in `frontend/src/utils/constants.ts`.
+- Fixed export options and polling intervals live in `frontend/src/utils/constants.ts`; allowed source extensions are validated by the backend.
 - Helper functions live in `frontend/src/utils/helpers.ts`; pay attention to sorting/formatting/normalization behavior with tests or builds.
 - The LocalStorage preset key may affect existing users' settings; consider migration or backward compatibility when changing it.
 - Avoid increasing the current language/tone inconsistency in UI text; new user-facing main text should be consistent and understandable where possible.
@@ -212,7 +232,7 @@ When changing the API contract:
 ## Docker and Deploy
 
 - `Dockerfile` has two stages: `node:22-slim` builds the frontend, and `python:3.11-slim` creates the final runtime image.
-- The final image ships with defaults `PYTHONPATH=/app/src`, `VIDEO_CONVERTER_STORAGE=redis`, and `DATA_ROOT=/data`.
+- The final image ships with defaults `PYTHONPATH=/app/src`, `VIDEO_CONVERTER_STORAGE=redis`, and `DATA_ROOT=/app-data`.
 - FFmpeg is installed into the final image via apt; without FFmpeg, the worker cannot perform real conversions.
 - `docker-compose.yml` is the only Compose file and supports local, Coolify/Portainer, VPS, and Raspberry Pi deployments through `.env` variables.
 - The `app` service runs both API and worker via `entrypoint.sh`; `APP_PORT` controls the host port and `APP_DATA_SOURCE` accepts either a bind path or the `app-data` named volume.
@@ -267,9 +287,9 @@ When writing tests:
 ### Adding a New API Field
 
 1. Update the Pydantic model in `src/video_converter/core/models.py`.
-2. Update create/list/response logic in `src/video_converter/api/main.py`.
+2. Update create/list/response logic in the matching `src/video_converter/api/routers/` module; put shared helpers in `api/routes.py`.
 3. Update the type in `frontend/src/models.ts` and, if needed, the helper in `frontend/src/api.ts`.
-4. If it will be shown in the UI, handle it in `frontend/src/main.tsx` or `frontend/src/components/ui.tsx`.
+4. If it will be shown in the UI, handle it in `frontend/src/App.tsx`, `frontend/src/pages/`, or `frontend/src/components/ui.tsx`.
 5. Run `pytest tests/api` and `cd frontend && npm run build`.
 
 ### Adding a New Export Option

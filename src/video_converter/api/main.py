@@ -120,7 +120,24 @@ def __getattr__(name: str):
     try:
         value = getattr(routes, name)
     except AttributeError:
-        raise
+        # Handlers live in their domain routers now; expose them here for
+        # backwards-compatible imports (``api.list_jobs``).
+        for module in (
+            health,
+            jobs,
+            batches,
+            outputs,
+            media,
+            settings_router,
+            audit,
+            tools,
+            ui,
+        ):
+            if hasattr(module, name):
+                value = getattr(module, name)
+                break
+        else:
+            raise
     if name.startswith("_") or not inspect.iscoroutinefunction(value):
         return value
 

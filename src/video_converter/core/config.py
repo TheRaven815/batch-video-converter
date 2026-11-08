@@ -23,6 +23,7 @@ LOW_PRIORITY_QUEUE_NAME = "jobs:queue:low"
 PROCESSING_QUEUE_NAME = "jobs:processing"
 JOB_KEY_PREFIX = "job:"
 JOBS_INDEX_KEY = "jobs:index"
+RETRY_JOBS_INDEX_KEY = "jobs:status:retry_wait"
 BATCHES_INDEX_KEY = "batches:index"
 BATCH_JOBS_KEY_PREFIX = "batch:jobs:"
 JOB_EVENTS_CHANNEL = "jobs:events"
@@ -163,9 +164,12 @@ def _parse_media_roots(raw_value: str, *, input_dir: Path) -> tuple[MediaRoot, .
 def _load_or_create_jwt_secret(data_dir: Path) -> str:
     """Persist an auto-generated JWT secret so sessions survive restarts.
 
-    Regenerating the secret on every process start invalidated all sessions
-    and broke multi-process deployments (each process got its own secret).
+    The file is created with ``O_EXCL`` so concurrent API/worker first starts
+    cannot each write a different secret; the loser re-reads the winner's file.
     """
+    import os
+    import secrets
+
     secret_path = data_dir / "jwt_secret"
     try:
         existing = secret_path.read_text().strip()
@@ -174,13 +178,19 @@ def _load_or_create_jwt_secret(data_dir: Path) -> str:
     except OSError:
         pass
 
-    import secrets
-
     secret = secrets.token_hex(32)
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
-        secret_path.touch(mode=0o600, exist_ok=True)
-        secret_path.write_text(secret)
+        try:
+            descriptor = os.open(secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            # Another process created it first; reuse its secret.
+            existing = secret_path.read_text().strip()
+            return existing or secret
+        try:
+            os.write(descriptor, secret.encode())
+        finally:
+            os.close(descriptor)
         secret_path.chmod(0o600)
     except OSError:
         # DATA_ROOT not writable: fall back to an ephemeral secret rather than

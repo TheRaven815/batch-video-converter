@@ -94,8 +94,11 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}
           >
             <div className="form-group">
-              <label className="form-label">{t('auth.username')}</label>
+              <label className="form-label" htmlFor="login-username">
+                {t('auth.username')}
+              </label>
               <input
+                id="login-username"
                 type="text"
                 className="form-input"
                 value={username}
@@ -108,8 +111,11 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label">{t('auth.password')}</label>
+              <label className="form-label" htmlFor="login-password">
+                {t('auth.password')}
+              </label>
               <input
+                id="login-password"
                 type="password"
                 className="form-input"
                 value={password}
@@ -122,8 +128,11 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
 
             {isSetup && (
               <div className="form-group">
-                <label className="form-label">{t('auth.confirmPassword')}</label>
+                <label className="form-label" htmlFor="login-confirm-password">
+                  {t('auth.confirmPassword')}
+                </label>
                 <input
+                  id="login-confirm-password"
                   type="password"
                   className="form-input"
                   value={confirmPassword}

@@ -106,7 +106,7 @@ Key parts:
 | --- | --- | --- | --- |
 | `mp4` | `h264_mp4` | `copy` (fallback to `aac` if incompatible), `aac`, `mp3`, `opus` | `none`, `embedded` (`mov_text`), `separate_srt` |
 | `mkv` | `h264_mkv` / `h265_mp4` | `copy`, `aac`, `mp3`, `opus` | `none`, `embedded` (copy), `separate_srt` |
-| `webm` | `vp9_webm` | `copy` (fallback to `opus`), `opus`, `vorbis` | `none`, `embedded` (`webvtt`), `separate_srt` |
+| `webm` | `vp9_webm` | `copy` (fallback to `opus`), `opus` | `none`, `embedded` (`webvtt`), `separate_srt` |
 
 Notes:
 
@@ -603,6 +603,7 @@ Jobs and batches (Bearer token required):
 - `POST /api/v1/jobs/batch` — create many jobs; supports `Idempotency-Key`.
 - `GET /api/v1/jobs` — list jobs with filters and cursor pagination.
 - `GET /api/v1/jobs/{job_id}` — get one job.
+- `GET /api/v1/jobs/{job_id}/log` — sanitized FFmpeg log tail/download.
 - `GET /api/v1/batches` — batch summaries.
 - `GET /api/v1/jobs/stream` — SSE job updates (ticket auth, `request:jobs:stream`).
 - `POST /api/v1/jobs/{job_id}/cancel` — cancel one job.
@@ -617,8 +618,13 @@ Media and outputs (Bearer token required):
 - `GET /api/v1/media/browse?root_key=...&path=...&q=...` — browse root-relative path.
 - `GET /api/v1/media/streams?root_key=...&path=...` — probe all streams (video/audio/subtitle) via ffprobe.
 - `GET /api/v1/media/subtitles?root_key=...&path=...` — legacy subtitle probe (kept for compatibility).
+- `POST /api/v1/media/uploads` — multipart upload into `DATA_ROOT/input`.
 - `GET /api/v1/outputs` — list generated outputs.
 - `GET /api/v1/outputs/{filename}/download` — sanitized download.
+- `GET /api/v1/outputs/{filename}/preview` — inline preview with range support.
+- `GET /api/v1/outputs/{filename}/thumbnail` — generated thumbnail.
+- `DELETE /api/v1/outputs/{filename}` — delete one output.
+- `DELETE /api/v1/outputs` — clear all outputs.
 - `GET /api/v1/worker/health` — queue depth, running count, storage health.
 - `POST /api/v1/tools/mp4-fix` — remux a new MP4 copy (`+genpts` + `+faststart`)
   under `DATA_ROOT/outputs`; source remains unchanged. Response includes the new
@@ -633,6 +639,7 @@ System settings (Bearer token required):
 
 - `GET /api/v1/settings` — persisted settings with safe defaults.
 - `POST /api/v1/settings` — persist `worker_concurrency`, `default_export`, `auto_cleanup`, `ui`. Older clients may send only `worker_concurrency`.
+- `GET /api/v1/audit` — recent audit events.
 
 Typical settings payload:
 
@@ -794,6 +801,7 @@ docker compose up --build
 `-- tests/
     |-- api/
     |-- core/
+    |-- support.py                    # shared FakeRedis / in-memory repository
     `-- worker/
 ```
 

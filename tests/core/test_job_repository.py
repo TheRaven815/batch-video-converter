@@ -11,105 +11,7 @@ from video_converter.core.config import (
 from video_converter.core.job_repository import RUNNING_JOBS_INDEX_KEY, JobRepository
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
-
-class _Pipeline:
-    def __init__(self, redis: "_FakeRedis") -> None:
-        self.redis = redis
-        self.commands: list[tuple[str, tuple[object, ...]]] = []
-
-    def set(self, key: str, value: str) -> "_Pipeline":
-        self.commands.append(("set", (key, value)))
-        return self
-
-    def rpush(self, key: str, value: str) -> "_Pipeline":
-        self.commands.append(("rpush", (key, value)))
-        return self
-
-    def lrem(self, key: str, count: int, value: str) -> "_Pipeline":
-        self.commands.append(("lrem", (key, count, value)))
-        return self
-
-    def sadd(self, key: str, *values: str) -> "_Pipeline":
-        self.commands.append(("sadd", (key, *values)))
-        return self
-
-    def srem(self, key: str, *values: str) -> "_Pipeline":
-        self.commands.append(("srem", (key, *values)))
-        return self
-
-    def delete(self, key: str) -> "_Pipeline":
-        self.commands.append(("delete", (key,)))
-        return self
-
-    def execute(self) -> list[object]:
-        results: list[object] = []
-        for name, args in self.commands:
-            results.append(getattr(self.redis, name)(*args))
-        return results
-
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.lists: dict[str, list[str]] = {
-            QUEUE_NAME: [],
-            JOBS_INDEX_KEY: [],
-        }
-        self.sets: dict[str, set[str]] = {RUNNING_JOBS_INDEX_KEY: set()}
-        self.published: list[tuple[str, str]] = []
-
-    def pipeline(self, transaction: bool = True) -> _Pipeline:
-        return _Pipeline(self)
-
-    def set(self, key: str, value: str) -> bool:
-        self.values[key] = value
-        return True
-
-    def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    def rpush(self, key: str, value: str) -> int:
-        self.lists.setdefault(key, []).append(value)
-        return len(self.lists[key])
-
-    def lrange(self, key: str, start: int, end: int) -> list[str]:
-        values = self.lists.get(key, [])
-        if end == -1:
-            return values[start:]
-        return values[start : end + 1]
-
-    def llen(self, key: str) -> int:
-        return len(self.lists.get(key, []))
-
-    def lrem(self, key: str, count: int, value: str) -> int:
-        values = self.lists.setdefault(key, [])
-        removed = values.count(value)
-        self.lists[key] = [item for item in values if item != value]
-        return removed
-
-    def sadd(self, key: str, *values: str) -> int:
-        target = self.sets.setdefault(key, set())
-        before = len(target)
-        target.update(values)
-        return len(target) - before
-
-    def srem(self, key: str, *values: str) -> int:
-        target = self.sets.setdefault(key, set())
-        before = len(target)
-        target.difference_update(values)
-        return before - len(target)
-
-    def scard(self, key: str) -> int:
-        return len(self.sets.get(key, set()))
-
-    def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 0
-
-    def delete(self, key: str) -> int:
-        existed = key in self.values
-        self.values.pop(key, None)
-        return 1 if existed else 0
+from support import FakeRedis as _FakeRedis
 
 
 def _make_job(
@@ -175,6 +77,20 @@ def test_list_records_page_reads_only_requested_index_slice() -> None:
     assert next_cursor == 3
 
 
+def test_get_many_batches_records_with_one_mget() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    repository.enqueue_many(
+        [_make_job("job-1", JobStatus.queued), _make_job("job-2", JobStatus.queued)]
+    )
+
+    records = repository.get_many(["job-1", "job-2", "missing"])
+
+    assert set(records) == {"job-1", "job-2"}
+    assert records["job-1"].id == "job-1"
+    assert fake_redis.mget_calls == 1
+
+
 def test_recover_stale_running_jobs_requeues_only_old_running_jobs() -> None:
     fake_redis = _FakeRedis()
     repository = JobRepository(fake_redis)  # type: ignore[arg-type]
@@ -230,3 +146,44 @@ def test_requeue_existing_keeps_only_one_queue_entry() -> None:
     repository.requeue_existing(record)
 
     assert fake_redis.lists[QUEUE_NAME] == [record.id]
+
+
+def test_schedule_retry_never_clears_an_existing_cancellation() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    record = _make_job("job-1", JobStatus.running)
+    repository.enqueue(record)
+    stored = repository.get(record.id)
+    assert stored is not None
+    stored.cancel_requested = True
+    stored.status = JobStatus.queued
+    fake_redis.set(f"job:{record.id}", stored.model_dump_json())
+
+    scheduled = repository.schedule_retry(
+        stored, delay_seconds=30, reason="temporary failure"
+    )
+
+    assert scheduled is False
+    current = repository.get(record.id)
+    assert current is not None
+    assert current.cancel_requested is True
+    assert current.next_retry_at is None
+
+
+def test_update_status_does_not_resurrect_a_cancelled_job() -> None:
+    fake_redis = _FakeRedis()
+    repository = JobRepository(fake_redis)  # type: ignore[arg-type]
+    record = _make_job("job-1", JobStatus.cancelled)
+    repository.enqueue(record)
+
+    updated = repository.update_status(
+        record.id,
+        JobStatus.completed,
+        progress_percent=100,
+        progress_phase="completed",
+        progress_message="late completion",
+    )
+
+    assert updated is not None
+    assert updated.status == JobStatus.cancelled
+    assert repository.get(record.id).status == JobStatus.cancelled  # type: ignore[union-attr]

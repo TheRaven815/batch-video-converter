@@ -38,9 +38,11 @@ shutdown() {
 trap shutdown TERM INT
 
 # Wait until either process exits, then bring the other one down too.
-wait -n "$WORKER_PID" "$API_PID" || true
+EXIT_CODE=0
+wait -n "$WORKER_PID" "$API_PID" || EXIT_CODE=$?
 
-echo "[entrypoint] A process exited, shutting down remaining..."
+echo "[entrypoint] A process exited with code $EXIT_CODE, shutting down remaining..."
 kill -TERM "$WORKER_PID" "$API_PID" 2>/dev/null || true
 wait "$WORKER_PID" 2>/dev/null || true
 wait "$API_PID" 2>/dev/null || true
+exit "$EXIT_CODE"

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from video_converter.worker.main import _probe_all_streams
+from video_converter.worker.main import _probe_all_streams, _probe_media_info
 
 
 class _FakeCompletedProcess:
@@ -94,6 +94,43 @@ def test_probe_all_streams_returns_none_on_failure(monkeypatch: Any) -> None:
 
     result = _probe_all_streams(Path("/tmp/missing.mkv"))
     assert result is None
+
+
+def test_probe_media_info_uses_one_ffprobe_call(monkeypatch: Any) -> None:
+    payload = {
+        "format": {"duration": "12.500000"},
+        "streams": [
+            {"index": 0, "codec_type": "video", "codec_name": "h264"},
+            {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": 2},
+            {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "eng"}},
+        ],
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(list(command))
+        return _FakeCompletedProcess(payload)
+
+    monkeypatch.setattr("video_converter.worker.main.subprocess.run", fake_run)
+
+    result = _probe_media_info(Path("/tmp/fake.mkv"))
+
+    assert len(calls) == 1
+    assert result is not None
+    assert result["duration"] == 12.5
+    assert result["video"][0]["codec"] == "h264"
+    assert result["audio"][0]["codec"] == "aac"
+    assert result["subtitle"][0]["language"] == "eng"
+    assert any("format=duration" in part for part in calls[0])
+
+
+def test_probe_media_info_returns_none_on_failure(monkeypatch: Any) -> None:
+    def fake_run_fail(*args: Any, **kwargs: Any) -> Any:
+        raise FileNotFoundError
+
+    monkeypatch.setattr("video_converter.worker.main.subprocess.run", fake_run_fail)
+
+    assert _probe_media_info(Path("/tmp/missing.mkv")) is None
 
 
 def test_probe_all_streams_handles_channels_as_string(monkeypatch: Any) -> None:

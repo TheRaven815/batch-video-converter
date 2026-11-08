@@ -28,7 +28,11 @@ REQUIRED_MODULES = {
     "uvicorn": "uvicorn[standard]",
     "redis": "redis",
     "pydantic": "pydantic",
+    "pydantic_settings": "pydantic-settings",
     "jwt": "PyJWT",
+    "bcrypt": "bcrypt",
+    "multipart": "python-multipart",
+    "psutil": "psutil",
 }
 
 
@@ -107,10 +111,14 @@ def create_runtime_directories() -> None:
         data_root / "temp",
         data_root / "logs",
         data_root / "data",
-        PROJECT_ROOT / "media" / "movies",
-        PROJECT_ROOT / "media" / "series",
     ]:
         path.mkdir(parents=True, exist_ok=True)
+
+    # The sample media roots only matter on POSIX, where the default mounts
+    # point at ./media/*. Windows defaults use the user's own folders.
+    if os.name != "nt":
+        for path in (PROJECT_ROOT / "media" / "movies", PROJECT_ROOT / "media" / "series"):
+            path.mkdir(parents=True, exist_ok=True)
 
 
 def check_python_packages() -> None:
@@ -384,13 +392,15 @@ def wait_for_processes(processes: list[subprocess.Popen[bytes]]) -> int:
                 return_code = proc.poll()
                 if return_code is not None:
                     print(f"[exit] Child process {proc.pid} exited with code {return_code}.")
-                    terminate_processes(processes)
                     return return_code
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n[stop] Ctrl+C received. Stopping local services...")
-        terminate_processes(processes)
         return 130
+    finally:
+        # Also runs for SystemExit raised by the SIGTERM handler, which used to
+        # leave child processes alive on Windows.
+        terminate_processes(processes)
 
 
 def print_configuration(args: argparse.Namespace) -> None:

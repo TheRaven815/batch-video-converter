@@ -5,28 +5,7 @@ from fastapi import Response
 import video_converter.api.main as api
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
-
-class _FakeJobRepository:
-    def __init__(self, ids: list[str]) -> None:
-        self._ids = ids
-
-    def list_ids(self) -> list[str]:
-        return list(self._ids)
-
-    def list_records_page(
-        self, *, cursor: int = 0, limit: int = 100, newest_first: bool = True
-    ) -> tuple[list[JobRecord], int | None]:
-        ids = list(reversed(self._ids)) if newest_first else list(self._ids)
-        page_ids = ids[cursor : cursor + limit]
-        records = [api._get_job_record(job_id) for job_id in page_ids]
-        next_cursor = cursor + len(page_ids) if cursor + len(page_ids) < len(ids) else None
-        return [record for record in records if record is not None], next_cursor
-
-    def count_running_jobs(self) -> int:
-        return 0
-
-    def lrange(self, key: str, start: int, end: int) -> list[str]:
-        return list(self._ids)
+from support import FakeJobRepository as _FakeJobRepository
 
 
 def _make_job(
@@ -76,8 +55,7 @@ def test_list_jobs_returns_newest_first_and_applies_limit(monkeypatch: Any) -> N
         "job-3": _make_job("job-3", JobStatus.queued),
     }
 
-    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids))
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids, records))
 
     listed = api.list_jobs(response=Response(), status=None, limit=2)
 
@@ -93,8 +71,7 @@ def test_list_jobs_status_filter_keeps_newest_first(monkeypatch: Any) -> None:
         "job-4": _make_job("job-4", JobStatus.failed),
     }
 
-    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids))
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids, records))
 
     listed = api.list_jobs(response=Response(), status=JobStatus.completed, limit=10)
 
@@ -110,8 +87,7 @@ def test_list_jobs_accepts_comma_status_and_cursor(monkeypatch: Any) -> None:
         "job-4": _make_job("job-4", JobStatus.running),
     }
 
-    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids))
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids, records))
 
     listed = api.list_jobs(response=Response(), status="failed,completed", limit=10, cursor=1)
 
@@ -119,13 +95,12 @@ def test_list_jobs_accepts_comma_status_and_cursor(monkeypatch: Any) -> None:
 
 
 def test_job_id_cursor_stays_stable_when_a_new_job_is_inserted(monkeypatch: Any) -> None:
-    repository = _FakeJobRepository(["job-1", "job-2", "job-3"])
     records = {
         job_id: _make_job(job_id, JobStatus.completed)
         for job_id in ("job-1", "job-2", "job-3", "job-4")
     }
+    repository = _FakeJobRepository(["job-1", "job-2", "job-3"], records)
     monkeypatch.setattr(api, "job_repository", repository)
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
     first_response = Response()
 
     first_page = api.list_jobs(response=first_response, limit=2)
@@ -169,8 +144,7 @@ def test_list_jobs_filters_by_q_profile_root_and_date(monkeypatch: Any) -> None:
         ),
     }
 
-    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids))
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids, records))
 
     listed = api.list_jobs(
         response=Response(),
@@ -194,8 +168,7 @@ def test_list_jobs_filters_source_type_and_hides_archived(monkeypatch: Any) -> N
         "archived-1": _make_job("archived-1", JobStatus.completed, archived=True),
     }
 
-    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids))
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids, records))
 
     listed = api.list_jobs(response=Response(), source_type="server", limit=10)
 
@@ -210,8 +183,7 @@ def test_list_batches_returns_aggregate_counts_and_progress(monkeypatch: Any) ->
         "job-3": _make_job("job-3", JobStatus.failed, batch_id="batch-b", progress_percent=100),
     }
 
-    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids))
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr(api, "job_repository", _FakeJobRepository(ordered_ids, records))
 
     result = api.list_batches(response=Response())
 

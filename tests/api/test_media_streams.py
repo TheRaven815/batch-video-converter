@@ -144,8 +144,14 @@ def test_media_streams_60s_cache_used(tmp_path: Path, monkeypatch: Any) -> None:
     _run(media.probe_media_streams(root_key="root", path="movie2.mkv"))
     # tamper cache expiry to simulate not-expired
     assert ("root", "movie2.mkv") in media._streams_probe_cache
-    expiry, _ = media._streams_probe_cache[("root", "movie2.mkv")]
+    expiry, cached_mtime, cached_size, _ = media._streams_probe_cache[
+        ("root", "movie2.mkv")
+    ]
     assert expiry > media.time.monotonic()
+    assert (cached_mtime, cached_size) == (
+        (media_root / "movie2.mkv").stat().st_mtime_ns,
+        (media_root / "movie2.mkv").stat().st_size,
+    )
 
     # second payload would be different but cache returns first
     different_payload = {"streams": [{"index": 0, "codec_type": "video", "codec_name": "hevc"}]}

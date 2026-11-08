@@ -22,9 +22,13 @@ import type {
 import { loadLanguage, translate } from './i18n';
 
 let authToken: string | null = localStorage.getItem('video-converter-auth-token');
+let streamTicketCache: { ticket: string; expiresAt: number } | null = null;
+let streamTicketRequest: Promise<string> | null = null;
 
 export function setAuthToken(token: string | null) {
   authToken = token;
+  streamTicketCache = null;
+  streamTicketRequest = null;
   if (token) {
     localStorage.setItem('video-converter-auth-token', token);
   } else {
@@ -129,16 +133,6 @@ export async function probeSubtitles(
   return request<MediaSubtitleProbeResponse>(`/api/v1/media/subtitles?${params.toString()}`);
 }
 
-export async function probeStreams(
-  rootKey: string,
-  path: string,
-): Promise<import('./models').MediaStreamsProbeResponse> {
-  const params = new URLSearchParams({ root_key: rootKey, path });
-  return request<import('./models').MediaStreamsProbeResponse>(
-    `/api/v1/media/streams?${params.toString()}`,
-  );
-}
-
 export async function listJobs(
   filters: Partial<JobFilters>,
   limit = 250,
@@ -151,6 +145,7 @@ export async function listJobs(
   if (filters.profile?.trim()) params.set('profile', filters.profile.trim());
   if (filters.sourceType && filters.sourceType !== 'all')
     params.set('source_type', filters.sourceType);
+  if (filters.includeArchived) params.set('include_archived', 'true');
 
   const { data, headers } = await requestWithHeaders<JobRecord[]>(
     `/api/v1/jobs?${params.toString()}`,
@@ -240,10 +235,70 @@ export async function deleteOutput(filename: string): Promise<void> {
   });
 }
 
-export async function uploadMedia(file: File): Promise<UploadResponse> {
-  const form = new FormData();
-  form.append('file', file);
-  return request<UploadResponse>('/api/v1/media/uploads', { method: 'POST', body: form });
+export async function uploadMedia(
+  file: File,
+  options?: {
+    onProgress?: (percent: number) => void;
+    signal?: AbortSignal;
+  },
+): Promise<UploadResponse> {
+  return new Promise((resolve, reject) => {
+    if (options?.signal?.aborted) {
+      reject(new DOMException('Upload aborted', 'AbortError'));
+      return;
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/v1/media/uploads');
+    xhr.setRequestHeader('Accept', 'application/json');
+    if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+
+    const onAbort = () => xhr.abort();
+    options?.signal?.addEventListener('abort', onAbort, { once: true });
+    const finish = () => options?.signal?.removeEventListener('abort', onAbort);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        options?.onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onerror = () => {
+      finish();
+      reject(new Error(translate(loadLanguage(), 'convert.uploadFailed')));
+    };
+    xhr.onabort = () => {
+      finish();
+      reject(new DOMException('Upload aborted', 'AbortError'));
+    };
+    xhr.onload = () => {
+      finish();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as UploadResponse);
+        } catch {
+          reject(new Error(translate(loadLanguage(), 'convert.uploadFailed')));
+        }
+        return;
+      }
+      if (xhr.status === 401 && authToken) {
+        setAuthToken(null);
+        window.location.reload();
+      }
+      reject(
+        new Error(
+          extractErrorMessage(xhr.responseText) ??
+            translate(loadLanguage(), 'api.requestFailed', {
+              method: 'POST',
+              status: xhr.status,
+            }),
+        ),
+      );
+    };
+
+    const form = new FormData();
+    form.append('file', file);
+    xhr.send(form);
+  });
 }
 
 export async function getProtectedMediaUrl(path: string): Promise<string> {
@@ -331,12 +386,25 @@ export async function authLogin(username: string, password: string): Promise<str
 }
 
 export async function getStreamTicket(): Promise<string> {
-  // EventSource cannot send an Authorization header, so the SSE endpoint is
-  // opened with a short-lived single-purpose ticket instead of the real token.
-  const data = await request<{ ticket: string; expires_in: number }>('/api/v1/auth/stream-ticket', {
-    method: 'POST',
+  // EventSource cannot send an Authorization header, so media and SSE use a
+  // scoped ticket. Cache it for its lifetime: one dashboard render used to
+  // fire a POST per thumbnail, and a 60s ticket broke video seeking.
+  if (streamTicketCache && streamTicketCache.expiresAt > Date.now()) {
+    return streamTicketCache.ticket;
+  }
+  if (streamTicketRequest) return streamTicketRequest;
+  streamTicketRequest = (async () => {
+    const data = await request<{ ticket: string; expires_in: number }>(
+      '/api/v1/auth/stream-ticket',
+      { method: 'POST' },
+    );
+    const ttlMs = Math.max(30, data.expires_in - 30) * 1000;
+    streamTicketCache = { ticket: data.ticket, expiresAt: Date.now() + ttlMs };
+    return data.ticket;
+  })().finally(() => {
+    streamTicketRequest = null;
   });
-  return data.ticket;
+  return streamTicketRequest;
 }
 
 export async function updateCredentials(
@@ -354,7 +422,10 @@ export async function updateCredentials(
   });
 }
 
-export async function fixMp4(payload: Mp4FixRequest, signal?: AbortSignal): Promise<Mp4FixResponse> {
+export async function fixMp4(
+  payload: Mp4FixRequest,
+  signal?: AbortSignal,
+): Promise<Mp4FixResponse> {
   return request<Mp4FixResponse>('/api/v1/tools/mp4-fix', {
     method: 'POST',
     signal,

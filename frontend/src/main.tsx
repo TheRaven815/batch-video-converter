@@ -1,12 +1,12 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
-import { Toaster } from 'sonner';
 import { Router } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ThemedToaster } from './components/ThemedToaster';
 import { I18nProvider } from './i18n';
 
 const queryClient = new QueryClient({
@@ -35,7 +35,7 @@ createRoot(root).render(
         <QueryClientProvider client={queryClient}>
           <Router hook={useHashLocation}>
             <App />
-            <Toaster theme="dark" richColors closeButton position="bottom-right" />
+            <ThemedToaster />
           </Router>
         </QueryClientProvider>
       </ErrorBoundary>

@@ -6,59 +6,7 @@ import video_converter.api.main as api
 from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NAME
 from video_converter.core.models import JobIdsRequest, JobRecord, JobStatus, now_iso
 
-
-class _FakeJobRepository:
-    def __init__(self) -> None:
-        self.queue: list[str] = []
-        self.index: list[str] = []
-        self.deleted_keys: list[str] = []
-
-    def remove_from_queue(self, job_id: str) -> int:
-        return self.lrem(QUEUE_NAME, 0, job_id)
-
-    def persist(self, record: JobRecord) -> None:
-        return None
-
-    def requeue_existing(self, record: JobRecord) -> None:
-        self.queue.append(record.id)
-
-    def delete(self, job_id: str) -> None:
-        self.lrem(QUEUE_NAME, 0, job_id)
-        self.lrem(JOBS_INDEX_KEY, 0, job_id)
-        self.deleted_keys.append(f"{JOB_KEY_PREFIX}{job_id}")
-
-    def lrem(self, key: str, count: int, value: str) -> int:
-        target = self.queue if key == QUEUE_NAME else self.index
-        removed = 0
-        kept: list[str] = []
-        for item in target:
-            if item == value:
-                removed += 1
-                if count != 0 and removed >= count:
-                    kept.extend(target[len(kept) + removed :])
-                    break
-            else:
-                kept.append(item)
-        else:
-            if removed == 0:
-                return 0
-
-        if count == 0 and removed > 0:
-            target[:] = [item for item in target if item != value]
-            return removed
-
-        if removed > 0:
-            target[:] = kept
-        return removed
-
-    def rpush(self, key: str, value: str) -> int:
-        if key == QUEUE_NAME:
-            self.queue.append(value)
-            return len(self.queue)
-        if key == JOBS_INDEX_KEY:
-            self.index.append(value)
-            return len(self.index)
-        return 0
+from support import FakeJobRepository as _FakeJobRepository
 
 
 def _make_job(job_id: str, status: JobStatus) -> JobRecord:
@@ -87,15 +35,14 @@ def _make_job(job_id: str, status: JobStatus) -> JobRecord:
 
 
 def test_start_jobs_bulk_skips_invalid_states_and_requeues_restartable(monkeypatch: Any) -> None:
-    fake_repository = _FakeJobRepository()
     records = {
         "running-1": _make_job("running-1", JobStatus.running),
         "queued-1": _make_job("queued-1", JobStatus.queued),
         "done-1": _make_job("done-1", JobStatus.completed),
     }
+    fake_repository = _FakeJobRepository(records=records)
 
     monkeypatch.setattr(api, "job_repository", fake_repository)
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
     monkeypatch.setattr(api, "_persist_job_record", lambda record: None)
 
     payload = JobIdsRequest(job_ids=["running-1", "queued-1", "done-1", "missing"])
@@ -114,16 +61,14 @@ def test_start_jobs_bulk_skips_invalid_states_and_requeues_restartable(monkeypat
 def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
     monkeypatch: Any,
 ) -> None:
-    fake_repository = _FakeJobRepository()
-    fake_repository.queue = ["queued-1", "other"]
-
     records = {
         "queued-1": _make_job("queued-1", JobStatus.queued),
         "done-1": _make_job("done-1", JobStatus.completed),
     }
+    fake_repository = _FakeJobRepository(records=records)
+    fake_repository.queue = ["queued-1", "other"]
 
     monkeypatch.setattr(api, "job_repository", fake_repository)
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
     monkeypatch.setattr(api, "_persist_job_record", lambda record: None)
 
     payload = JobIdsRequest(job_ids=["queued-1", "done-1", "missing"])
@@ -139,17 +84,15 @@ def test_cancel_jobs_bulk_marks_queued_jobs_cancelled_when_removed_from_queue(
 
 
 def test_archive_jobs_bulk_soft_deletes_terminal_records_only(monkeypatch: Any) -> None:
-    fake_repository = _FakeJobRepository()
-    fake_repository.queue = ["queued-1", "other"]
-
     records = {
         "archive-1": _make_job("archive-1", JobStatus.completed),
         "running-1": _make_job("running-1", JobStatus.running),
         "queued-1": _make_job("queued-1", JobStatus.queued),
     }
+    fake_repository = _FakeJobRepository(records=records)
+    fake_repository.queue = ["queued-1", "other"]
 
     monkeypatch.setattr(api, "job_repository", fake_repository)
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
 
     payload = JobIdsRequest(job_ids=["archive-1", "running-1", "queued-1", "missing"])
     result = api.archive_jobs_bulk(payload)
@@ -168,17 +111,15 @@ def test_archive_jobs_bulk_soft_deletes_terminal_records_only(monkeypatch: Any) 
 
 
 def test_delete_jobs_bulk_skips_running_and_removes_persisted_records(monkeypatch: Any) -> None:
-    fake_repository = _FakeJobRepository()
-    fake_repository.queue = ["delete-1", "running-1", "other"]
-    fake_repository.index = ["delete-1", "running-1", "other"]
-
     records = {
         "delete-1": _make_job("delete-1", JobStatus.completed),
         "running-1": _make_job("running-1", JobStatus.running),
     }
+    fake_repository = _FakeJobRepository(records=records)
+    fake_repository.queue = ["delete-1", "running-1", "other"]
+    fake_repository.index = ["delete-1", "running-1", "other"]
 
     monkeypatch.setattr(api, "job_repository", fake_repository)
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
 
     payload = JobIdsRequest(job_ids=["delete-1", "running-1", "missing"])
     result = api.delete_jobs_bulk(payload)
@@ -194,11 +135,10 @@ def test_delete_jobs_bulk_skips_running_and_removes_persisted_records(monkeypatc
 
 
 def test_archived_terminal_job_can_be_started_and_becomes_visible(monkeypatch: Any) -> None:
-    fake_repository = _FakeJobRepository()
     record = _make_job("restart-1", JobStatus.completed)
     records = {record.id: record}
+    fake_repository = _FakeJobRepository(records=records)
     monkeypatch.setattr(api, "job_repository", fake_repository)
-    monkeypatch.setattr(api, "_get_job_record", lambda job_id: records.get(job_id))
 
     archived = api.archive_jobs_bulk(JobIdsRequest(job_ids=[record.id]))
     restarted = api.start_jobs_bulk(JobIdsRequest(job_ids=[record.id]))

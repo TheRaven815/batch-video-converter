@@ -93,24 +93,19 @@ export interface ExportSettings {
   audio_export: AudioExport;
   subtitle_export: SubtitleExport;
   subtitle_language: string;
-  quality_crf: number;
+  quality_crf: number | null;
   target_video_bitrate: string;
-  audio_bitrate_kbps: number;
+  audio_bitrate_kbps: number | null;
   resolution: VideoResolution;
   encoder_preset: EncoderPreset;
   hardware_acceleration: HardwareAcceleration;
   max_attempts: number;
   priority: number;
-  // L-A legacy parity (optional overrides)
+  // Optional per-job stream overrides
   audio_stream_indexes?: number[] | null;
   subtitle_stream_indexes?: number[] | null;
   audio_channel_mode?: 'preserve' | 'downmix2' | null;
   skip_existing_output?: boolean;
-  // camelCase aliases for UI convenience
-  audioStreamIndexes?: number[] | null;
-  subtitleStreamIndexes?: number[] | null;
-  audioChannelMode?: 'preserve' | 'downmix2' | null;
-  skipExistingOutput?: boolean;
 }
 
 export interface JobFilters {
@@ -119,6 +114,7 @@ export interface JobFilters {
   sort: 'newest' | 'oldest' | 'progress';
   profile: string;
   sourceType: 'all' | 'server' | 'legacy';
+  includeArchived: boolean;
 }
 
 export type UiTheme = 'dark' | 'light' | 'system';

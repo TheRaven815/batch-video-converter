@@ -15,6 +15,10 @@ from video_converter.api.async_storage import (
 from video_converter.api.errors import error_code, path_validation_error
 from video_converter.api.main import create_app
 from video_converter.core.config import Settings
+from video_converter.core.job_repository import JobRepository
+from video_converter.core.job_repository_async import (
+    AsyncJobRepository as CanonicalAsyncJobRepository,
+)
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 from video_converter.core.path_validation import (
     InvalidSourceRootKeyError,
@@ -84,6 +88,27 @@ def test_local_async_storage_is_reserved_for_local_mode(tmp_path: Path) -> None:
         )
     )
     assert isinstance(client, AsyncLocalStore)
+
+
+def test_endpoints_registered_from_domain_routers() -> None:
+    application = create_app()
+    endpoint_modules = {
+        route.endpoint.__module__
+        for route in application.routes
+        if getattr(route, "endpoint", None) is not None
+    }
+    assert "video_converter.api.routers.jobs" in endpoint_modules
+    assert "video_converter.api.routers.outputs" in endpoint_modules
+    assert "video_converter.api.routers.media" in endpoint_modules
+    # The old string-slicing router was removed; routes.py now only hosts
+    # shared helpers and compatibility re-exports.
+    assert "video_converter.api.routes" not in endpoint_modules
+
+
+def test_sync_repository_uses_the_canonical_async_implementation() -> None:
+    repository = JobRepository(object())  # type: ignore[arg-type]
+    assert isinstance(repository._impl, CanonicalAsyncJobRepository)
+    assert AsyncJobRepository is CanonicalAsyncJobRepository
 
 
 def test_async_repository_enqueues_and_reads_local_records(tmp_path: Path) -> None:

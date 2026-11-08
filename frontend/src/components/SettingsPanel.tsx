@@ -66,6 +66,9 @@ export function SettingsPanel({
           : saved.ui.theme;
       document.documentElement.dataset.theme = theme;
       document.documentElement.dataset.density = saved.ui.density;
+      window.dispatchEvent(
+        new CustomEvent<SystemSettings>('video-converter:settings-updated', { detail: saved }),
+      );
     },
     onError: (error) => {
       showToast(error instanceof Error ? error.message : t('settings.updateFailed'), 'error');
@@ -139,7 +142,16 @@ export function SettingsPanel({
             <span className="form-section-title">{t('settings.conversionPreferences')}</span>
             <p className="settings-help">{t('settings.preferencesHelp')}</p>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={settingsLoading || !audioOptions[systemSettings.default_export.video_export].includes(systemSettings.default_export.audio_export)}>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={
+              settingsLoading ||
+              !audioOptions[systemSettings.default_export.video_export].includes(
+                systemSettings.default_export.audio_export,
+              )
+            }
+          >
             {settingsLoading ? t('settings.wait') : t('settings.save')}
           </button>
         </div>
@@ -177,14 +189,21 @@ export function SettingsPanel({
                   }
                   disabled={settingsLoading}
                 >
-                  {Array.from({ length: systemSettings.worker_concurrency_limit }, (_, index) => index + 1).map((num) => (
+                  {Array.from(
+                    { length: systemSettings.worker_concurrency_limit },
+                    (_, index) => index + 1,
+                  ).map((num) => (
                     <option key={num} value={num}>
                       {t('settings.jobsAtTime', { count: num })}
                     </option>
                   ))}
                 </select>
                 <p className="settings-help">{t('settings.concurrencyHelp')}</p>
-                <p className="settings-help">{t('settings.concurrencyLimit', { count: systemSettings.worker_concurrency_limit })}</p>
+                <p className="settings-help">
+                  {t('settings.concurrencyLimit', {
+                    count: systemSettings.worker_concurrency_limit,
+                  })}
+                </p>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="default-profile">
@@ -205,6 +224,7 @@ export function SettingsPanel({
                   disabled={settingsLoading}
                 >
                   <option value="h264_mp4">H.264 / MP4</option>
+                  <option value="h264_mkv">H.264 / MKV</option>
                   <option value="h265_mp4">H.265 / MP4</option>
                   <option value="vp9_webm">VP9 / WebM</option>
                 </select>
@@ -265,8 +285,12 @@ export function SettingsPanel({
                   }
                   disabled={settingsLoading}
                 >
-                  {!audioOptions[systemSettings.default_export.video_export].includes(systemSettings.default_export.audio_export) && (
-                    <option value={systemSettings.default_export.audio_export} disabled>{systemSettings.default_export.audio_export.toUpperCase()}</option>
+                  {!audioOptions[systemSettings.default_export.video_export].includes(
+                    systemSettings.default_export.audio_export,
+                  ) && (
+                    <option value={systemSettings.default_export.audio_export} disabled>
+                      {systemSettings.default_export.audio_export.toUpperCase()}
+                    </option>
                   )}
                   {audioOptions[systemSettings.default_export.video_export].map((option) => (
                     <option key={option} value={option}>
@@ -274,8 +298,12 @@ export function SettingsPanel({
                     </option>
                   ))}
                 </select>
-                {!audioOptions[systemSettings.default_export.video_export].includes(systemSettings.default_export.audio_export) && (
-                  <p className="form-alert-error" role="alert">{t('convert.incompatibleAudio')}</p>
+                {!audioOptions[systemSettings.default_export.video_export].includes(
+                  systemSettings.default_export.audio_export,
+                ) && (
+                  <p className="form-alert-error" role="alert">
+                    {t('convert.incompatibleAudio')}
+                  </p>
                 )}
               </div>
               <div className="form-group">
@@ -418,8 +446,11 @@ export function SettingsPanel({
                 />
               </label>
               <div className="form-group">
-                <label className="form-label">{t('settings.jobRetentionDays')}</label>
+                <label className="form-label" htmlFor="job-retention-days">
+                  {t('settings.jobRetentionDays')}
+                </label>
                 <input
+                  id="job-retention-days"
                   className="form-input"
                   type="number"
                   min={1}
@@ -463,8 +494,11 @@ export function SettingsPanel({
             </label>
             <div className="form-grid settings-mini-grid">
               <div className="form-group">
-                <label className="form-label">{t('settings.maximumAttempts')}</label>
+                <label className="form-label" htmlFor="retry-max-attempts">
+                  {t('settings.maximumAttempts')}
+                </label>
                 <input
+                  id="retry-max-attempts"
                   className="form-input"
                   type="number"
                   min={1}
@@ -481,8 +515,11 @@ export function SettingsPanel({
                 />
               </div>
               <div className="form-group">
-                <label className="form-label">{t('settings.minimumDisk')}</label>
+                <label className="form-label" htmlFor="minimum-disk-mb">
+                  {t('settings.minimumDisk')}
+                </label>
                 <input
+                  id="minimum-disk-mb"
                   className="form-input"
                   type="number"
                   min={0}
@@ -507,8 +544,11 @@ export function SettingsPanel({
             </span>
             <div className="form-grid settings-mini-grid">
               <div className="form-group">
-                <label className="form-label">{t('settings.theme')}</label>
+                <label className="form-label" htmlFor="ui-theme">
+                  {t('settings.theme')}
+                </label>
                 <select
+                  id="ui-theme"
                   className="form-input"
                   value={systemSettings.ui.theme}
                   onChange={(event) =>
@@ -526,8 +566,11 @@ export function SettingsPanel({
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">{t('settings.density')}</label>
+                <label className="form-label" htmlFor="ui-density">
+                  {t('settings.density')}
+                </label>
                 <select
+                  id="ui-density"
                   className="form-input"
                   value={systemSettings.ui.density}
                   onChange={(event) =>

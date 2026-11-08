@@ -4,6 +4,7 @@ import { Download, FileVideo, Folder, Play, Search, Trash2, Upload, Wrench } fro
 import { useLocation } from 'wouter';
 
 import { downloadOutput, fixMp4, probeSubtitles, uploadMedia } from '../api';
+import { SelectField } from '../components/ui';
 import { useAppContext } from '../context/AppContext';
 import { serverKeys } from '../hooks/useServerState';
 import { useI18n } from '../i18n';
@@ -22,12 +23,24 @@ export default function ConvertPage() {
   const subtitleLanguages = useMemo(() => uniqueLanguages(app.staged), [app.staged]);
   const selectedStageCount = app.staged.filter((item) => item.selected).length;
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const uploadController = useRef<AbortController | null>(null);
 
   const uploadFiles = async (files: FileList | File[]) => {
+    const pending = Array.from(files);
+    if (!pending.length) return;
+
+    const controller = new AbortController();
+    uploadController.current = controller;
     setUploading(true);
+    setUploadProgress(0);
     try {
-      for (const file of Array.from(files)) {
-        const uploaded = await uploadMedia(file);
+      for (const [index, file] of pending.entries()) {
+        const uploaded = await uploadMedia(file, {
+          signal: controller.signal,
+          onProgress: (percent) =>
+            setUploadProgress(Math.round(((index + percent / 100) / pending.length) * 100)),
+        });
         app.setStaged((current) => [
           ...current,
           {
@@ -43,9 +56,15 @@ export default function ConvertPage() {
       }
       app.showToast(t('convert.uploadAdded'), 'success');
     } catch (error) {
-      app.showToast(error instanceof Error ? error.message : t('convert.uploadFailed'), 'error');
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        app.showToast(t('convert.uploadCancelled'), 'info');
+      } else {
+        app.showToast(error instanceof Error ? error.message : t('convert.uploadFailed'), 'error');
+      }
     } finally {
+      uploadController.current = null;
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -125,6 +144,25 @@ export default function ConvertPage() {
             onChange={(event) => event.target.files && void uploadFiles(event.target.files)}
           />
         </label>
+        {uploading && (
+          <div className="upload-progress" role="status" aria-live="polite">
+            <div className="upload-progress-row">
+              <span>
+                {t('convert.uploading')} {uploadProgress}%
+              </span>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => uploadController.current?.abort()}
+              >
+                {t('common.cancel')}
+              </button>
+            </div>
+            <div className="progress-track">
+              <div className="progress-fill running" style={{ width: `${uploadProgress}%` }} />
+            </div>
+          </div>
+        )}
         <div className="browser-controls">
           <select
             className="form-input root-select"
@@ -281,7 +319,7 @@ export default function ConvertPage() {
 
         <span className="form-section-title border-b pb-2 mt-4">{t('convert.exportOptions')}</span>
         <div className="form-grid">
-          <ExportSelect
+          <SelectField
             label={t('convert.videoFormat')}
             value={app.settings.video_export}
             onChange={(value) =>
@@ -296,7 +334,7 @@ export default function ConvertPage() {
               ['webm', 'WebM (VP9)'],
             ]}
           />
-          <ExportSelect
+          <SelectField
             label={t('convert.audio')}
             value={app.settings.audio_export}
             onChange={(value) =>
@@ -306,13 +344,16 @@ export default function ConvertPage() {
               }))
             }
             options={audioOptions[app.settings.video_export].map((option) => [
-              option, option === 'copy' ? t('convert.copyOriginal') : option.toUpperCase(),
+              option,
+              option === 'copy' ? t('convert.copyOriginal') : option.toUpperCase(),
             ])}
           />
           {!audioOptions[app.settings.video_export].includes(app.settings.audio_export) && (
-            <p className="form-alert-error" role="alert">{t('convert.incompatibleAudio')}</p>
+            <p className="form-alert-error" role="alert">
+              {t('convert.incompatibleAudio')}
+            </p>
           )}
-          <ExportSelect
+          <SelectField
             label={t('convert.subtitles')}
             value={app.settings.subtitle_export}
             onChange={(value) =>
@@ -327,7 +368,7 @@ export default function ConvertPage() {
               ['separate_srt', t('convert.separateSrt')],
             ]}
           />
-          <ExportSelect
+          <SelectField
             label={t('convert.languagePreference')}
             value={app.settings.subtitle_language}
             onChange={(value) =>
@@ -338,7 +379,7 @@ export default function ConvertPage() {
               ...subtitleLanguages.map((language) => [language, language] as [string, string]),
             ]}
           />
-          <ExportSelect
+          <SelectField
             label={t('convert.resolution')}
             value={app.settings.resolution}
             onChange={(value) =>
@@ -354,7 +395,7 @@ export default function ConvertPage() {
               ['480p', '480p'],
             ]}
           />
-          <ExportSelect
+          <SelectField
             label={t('convert.encoderPreset')}
             value={app.settings.encoder_preset}
             onChange={(value) =>
@@ -372,32 +413,40 @@ export default function ConvertPage() {
             ]}
           />
           <div className="form-group">
-            <label className="form-label" htmlFor="quality-crf">{t('convert.quality')}</label>
+            <label className="form-label" htmlFor="quality-crf">
+              {t('convert.quality')}
+            </label>
             <input
               id="quality-crf"
               disabled={Boolean(app.settings.target_video_bitrate.trim())}
-              aria-describedby={app.settings.target_video_bitrate.trim() ? 'quality-bitrate-note' : undefined}
+              aria-describedby={
+                app.settings.target_video_bitrate.trim() ? 'quality-bitrate-note' : undefined
+              }
               className="form-input"
               type="number"
               min={0}
               max={51}
-              value={app.settings.quality_crf}
+              value={app.settings.quality_crf ?? ''}
+              placeholder="Auto"
               onChange={(event) =>
                 app.setSettings((current) => ({
                   ...current,
-                  quality_crf: Number(event.target.value),
+                  quality_crf: event.target.value === '' ? null : Number(event.target.value),
                 }))
               }
             />
             {app.settings.target_video_bitrate.trim() && (
               <p id="quality-bitrate-note" className="text-xs text-zinc-400">
-                Hedef video bitrate seçiliyken CRF kullanılmaz.
+                {t('convert.crfIgnored')}
               </p>
             )}
           </div>
           <div className="form-group">
-            <label className="form-label">{t('convert.videoBitrate')}</label>
+            <label className="form-label" htmlFor="video-bitrate">
+              {t('convert.videoBitrate')}
+            </label>
             <input
+              id="video-bitrate"
               className="form-input"
               placeholder={t('convert.videoBitrateHint')}
               value={app.settings.target_video_bitrate}
@@ -410,22 +459,26 @@ export default function ConvertPage() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">{t('convert.audioBitrate')}</label>
+            <label className="form-label" htmlFor="audio-bitrate">
+              {t('convert.audioBitrate')}
+            </label>
             <input
+              id="audio-bitrate"
               className="form-input"
               type="number"
               min={32}
               max={512}
-              value={app.settings.audio_bitrate_kbps}
+              value={app.settings.audio_bitrate_kbps ?? ''}
+              placeholder="Auto"
               onChange={(event) =>
                 app.setSettings((current) => ({
                   ...current,
-                  audio_bitrate_kbps: Number(event.target.value),
+                  audio_bitrate_kbps: event.target.value === '' ? null : Number(event.target.value),
                 }))
               }
             />
           </div>
-          <ExportSelect
+          <SelectField
             label={t('convert.hardwareAcceleration')}
             value={app.settings.hardware_acceleration}
             onChange={(value) =>
@@ -441,8 +494,11 @@ export default function ConvertPage() {
             ]}
           />
           <div className="form-group">
-            <label className="form-label">{t('convert.retryAttempts')}</label>
+            <label className="form-label" htmlFor="retry-attempts">
+              {t('convert.retryAttempts')}
+            </label>
             <input
+              id="retry-attempts"
               className="form-input"
               type="number"
               min={1}
@@ -456,7 +512,7 @@ export default function ConvertPage() {
               }
             />
           </div>
-          <ExportSelect
+          <SelectField
             label={t('convert.queuePriority')}
             value={String(app.settings.priority)}
             onChange={(value) =>
@@ -477,10 +533,18 @@ export default function ConvertPage() {
           <button
             className="btn btn-primary"
             onClick={() => void app.submitBatch()}
-            disabled={app.submitting || selectedStageCount === 0 || !audioOptions[app.settings.video_export].includes(app.settings.audio_export)}
+            disabled={
+              app.submitting ||
+              selectedStageCount === 0 ||
+              !audioOptions[app.settings.video_export].includes(app.settings.audio_export)
+            }
           >
             <Play size={14} />
-            <span>{t('convert.queueJobs', { count: selectedStageCount })}</span>
+            <span>
+              {app.submitting
+                ? t('convert.submitting')
+                : t('convert.queueJobs', { count: selectedStageCount })}
+            </span>
           </button>
         </div>
 
@@ -492,6 +556,7 @@ export default function ConvertPage() {
 
 function Mp4RepairCard() {
   const app = useAppContext();
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [fixing, setFixing] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -521,7 +586,7 @@ function Mp4RepairCard() {
       }
     }
     if (!payload) {
-      app.showToast('Onarılacak MP4 dosyası seçin (hazırlananlar veya tarayıcıdan).', 'error');
+      app.showToast(t('mp4Fix.selectFirst'), 'error');
       return;
     }
     setFixing(true);
@@ -535,9 +600,9 @@ function Mp4RepairCard() {
       app.showToast(res.message, 'success');
     } catch (error) {
       if (controller.signal.aborted) {
-        app.showToast('Onarım iptal edildi.', 'info');
+        app.showToast(t('mp4Fix.cancelled'), 'info');
       } else {
-        app.showToast(error instanceof Error ? error.message : 'Onarım başarısız.', 'error');
+        app.showToast(error instanceof Error ? error.message : t('mp4Fix.failed'), 'error');
       }
     } finally {
       repairController.current = null;
@@ -548,16 +613,14 @@ function Mp4RepairCard() {
   return (
     <div className="form-panel">
       <span className="form-section-title border-b pb-2 flex items-center gap-2">
-        <Wrench size={14} /> MP4 Onar (faststart + genpts)
+        <Wrench size={14} /> {t('mp4Fix.title')}
       </span>
-      <p className="text-xs text-zinc-400">
-        MP4 dosyasını faststart + genpts ile yeniden paketleyip Çıktılar bölümünde yeni bir
-        onarılmış kopya oluşturur. Kaynak dosya değiştirilmez. Eksik moov verisini yeniden
-        oluşturamaz. Kaynak tarayıcıdan veya hazırlanan dosyalardan bir MP4 seçin.
-      </p>
+      <p className="text-xs text-zinc-400">{t('mp4Fix.description')}</p>
       {stagedOptions.length > 0 && (
         <div className="form-group">
-          <label className="form-label" htmlFor="mp4-repair-source">Hazırlanan MP4 dosyası</label>
+          <label className="form-label" htmlFor="mp4-repair-source">
+            {t('mp4Fix.selectLabel')}
+          </label>
           <select
             id="mp4-repair-source"
             className="form-input"
@@ -565,7 +628,7 @@ function Mp4RepairCard() {
             onChange={(e) => setSelected(e.target.value || null)}
             disabled={fixing}
           >
-            <option value="">— Seçin (veya tarayıcı seçimini kullan) —</option>
+            <option value="">{t('mp4Fix.selectPlaceholder')}</option>
             {stagedOptions.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} [{item.rootLabel}]
@@ -575,7 +638,11 @@ function Mp4RepairCard() {
         </div>
       )}
       <p role="status" className="text-xs break-all">
-        {repaired ? `Onarılmış kopya: ${repaired.filename}` : fixing ? 'Onarılmış kopya oluşturuluyor…' : ''}
+        {repaired
+          ? t('mp4Fix.repairedCopy', { name: repaired.filename })
+          : fixing
+            ? t('mp4Fix.creating')
+            : ''}
       </p>
       {repaired && (
         <button
@@ -584,57 +651,30 @@ function Mp4RepairCard() {
           onClick={() => {
             setDownloading(true);
             void downloadOutput(repaired.filename)
-              .catch((error: unknown) => app.showToast(error instanceof Error ? error.message : 'İndirme başarısız.', 'error'))
+              .catch((error: unknown) =>
+                app.showToast(
+                  error instanceof Error ? error.message : t('mp4Fix.downloadFailed'),
+                  'error',
+                ),
+              )
               .finally(() => setDownloading(false));
           }}
         >
           <Download size={14} aria-hidden="true" />
-          {downloading ? 'İndiriliyor…' : 'Onarılmış kopyayı indir'}
+          {downloading ? t('mp4Fix.downloading') : t('mp4Fix.download')}
         </button>
       )}
       <div className="flex justify-end">
         {fixing && (
           <button className="btn btn-outline" onClick={() => repairController.current?.abort()}>
-            Onarımı iptal et
+            {t('mp4Fix.cancel')}
           </button>
         )}
         <button className="btn btn-outline" onClick={() => void handleRepair()} disabled={fixing}>
           <Wrench size={14} />
-          <span>{fixing ? 'Kopya oluşturuluyor…' : 'Onarılmış kopya oluştur'}</span>
+          <span>{fixing ? t('mp4Fix.creating') : t('mp4Fix.create')}</span>
         </button>
       </div>
-    </div>
-  );
-}
-
-function ExportSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<[string, string]>;
-}) {
-  return (
-    <div className="form-group">
-      <label className="form-label">{label}</label>
-      <select
-        className="form-input"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-            {!options.some(([optionValue]) => optionValue === value) && (
-              <option value={value} disabled>{value.toUpperCase()}</option>
-            )}
-        {options.map(([optionValue, text]) => (
-          <option value={optionValue} key={optionValue}>
-            {text}
-          </option>
-        ))}
-      </select>
     </div>
   );
 }

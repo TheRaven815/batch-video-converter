@@ -1,10 +1,6 @@
 import type { ExportProfile, JobRecord, JobStatus } from '../models';
 import type { AppLanguage } from '../i18n';
 
-export function fileName(path: string): string {
-  return path.split('/').filter(Boolean).pop() || path || 'video';
-}
-
 export function formatDate(value?: string | null, language: AppLanguage = 'en'): string {
   if (!value) return '—';
   const date = new Date(value);
@@ -53,7 +49,7 @@ export function formatEta(seconds?: number | null, language: AppLanguage = 'en')
 
 export function deriveProfile(videoExport: string): ExportProfile {
   if (videoExport === 'webm') return 'vp9_webm';
-  if (videoExport === 'mkv') return 'h265_mp4';
+  if (videoExport === 'mkv') return 'h264_mkv';
   return 'h264_mp4';
 }
 

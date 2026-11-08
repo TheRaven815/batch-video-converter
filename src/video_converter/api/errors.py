@@ -32,10 +32,19 @@ _STATUS_ERRORS = {
     400: "bad_request",
     401: "authentication_failed",
     404: "not_found",
+    409: "conflict",
+    413: "payload_too_large",
+    416: "range_not_satisfiable",
     422: "validation_error",
+    429: "rate_limited",
+    499: "client_closed_request",
     500: "internal_error",
     503: "service_unavailable",
+    504: "gateway_timeout",
+    507: "insufficient_storage",
 }
+
+_RECOVERABLE_STATUSES = {409, 422, 429, 503, 504}
 
 
 def path_validation_error(exc: Exception, *, status_code: int = 422) -> ApiHTTPException:
@@ -50,7 +59,7 @@ def path_validation_error(exc: Exception, *, status_code: int = 422) -> ApiHTTPE
     )
     return ApiHTTPException(
         status_code,
-        ApiError(code, str(exc), recoverable=status_code in {409, 422, 503}),
+        ApiError(code, str(exc), recoverable=status_code in _RECOVERABLE_STATUSES),
     )
 
 
@@ -68,7 +77,9 @@ async def structured_http_exception_handler(request: Request, exc: HTTPException
             code=configured.code if configured else error_code(exc),
             message=configured.message if configured else message,
             recoverable=(
-                configured.recoverable if configured else exc.status_code in {409, 422, 503}
+                configured.recoverable
+                if configured
+                else exc.status_code in _RECOVERABLE_STATUSES
             ),
             details={"path": request.url.path},
         )

@@ -72,6 +72,7 @@ class LocalFileStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         self._lock = _threading.Lock()
+        self._next_expiry_prune = 0.0
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -111,9 +112,17 @@ class LocalFileStore:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS lists (key TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (key, position))"
                 )
+                # O(1) list length, so RPUSH/LPUSH no longer COUNT(*) on every
+                # call while still returning Redis' new-length contract.
                 conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_lists_key_position ON lists(key, position)"
+                    "CREATE TABLE IF NOT EXISTS list_lengths (key TEXT PRIMARY KEY, length INTEGER NOT NULL)"
                 )
+                # lrem filters on (key, value); the old (key, position) index
+                # duplicated the primary key and only cost write time.
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_lists_key_value ON lists(key, value)"
+                )
+                conn.execute("DROP INDEX IF EXISTS idx_lists_key_position")
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS sets (key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (key, value))"
                 )
@@ -122,10 +131,40 @@ class LocalFileStore:
                 conn.execute("ROLLBACK")
                 raise
 
+    def _prune_expired_kv(self, conn: sqlite3.Connection, *, force: bool = False) -> None:
+        """Drop expired keys periodically; callers must hold the store lock."""
+        now = time.monotonic()
+        if not force and now < self._next_expiry_prune:
+            return
+        self._next_expiry_prune = now + 60.0
+        conn.execute(
+            "DELETE FROM kv WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (time.time(),),
+        )
+
     def ping(self) -> bool:
         with self._lock, self._connect() as conn:
             conn.execute("SELECT 1")
         return True
+
+    def mget(self, keys: Iterable[str]) -> list[str | None]:
+        """Batch fetch keys with a single ``WHERE key IN (...)`` query."""
+        key_list = [str(key) for key in keys]
+        if not key_list:
+            return []
+        now = time.time()
+        placeholders = ",".join("?" for _ in key_list)
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT key, value, expires_at FROM kv WHERE key IN ({placeholders})",
+                tuple(key_list),
+            ).fetchall()
+        mapping: dict[str, str] = {}
+        for key, value, expires_at in rows:
+            if expires_at is not None and float(expires_at) <= now:
+                continue
+            mapping[str(key)] = str(value)
+        return [mapping.get(key) for key in key_list]
 
     def get(self, key: str) -> str | None:
         now = time.time()
@@ -165,18 +204,40 @@ class LocalFileStore:
                     "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
                     (key, value, expires_at),
                 )
+                self._prune_expired_kv(conn)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
         return True
 
-    def compare_and_set(self, key: str, expected: str | None, value: str) -> bool:
+    def compare_and_set(
+        self, key: str, expected: str | None, value: str
+    ) -> bool:
         """Atomically replace ``key`` only when its current value matches."""
+        return self.compare_and_set_with_ops(key, expected, value, ())
+
+    def compare_and_set_with_ops(
+        self,
+        key: str,
+        expected: str | None,
+        value: str,
+        operations: Iterable[tuple[str, tuple[Any, ...]]],
+    ) -> bool:
+        """CAS plus set/list operations in one SQLite transaction.
+
+        Used to keep the job record and the running-jobs index from drifting
+        apart when two workers update the same job concurrently.
+        """
+        now = time.time()
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
-                row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+                row = conn.execute(
+                    "SELECT value, expires_at FROM kv WHERE key = ? AND "
+                    "(expires_at IS NULL OR expires_at > ?)",
+                    (key, now),
+                ).fetchone()
                 current = str(row[0]) if row is not None else None
                 if current != expected:
                     conn.execute("COMMIT")
@@ -186,6 +247,7 @@ class LocalFileStore:
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = NULL",
                     (key, value),
                 )
+                self._apply_pipeline_operations(conn, operations)
                 conn.execute("COMMIT")
                 return True
             except Exception:
@@ -208,16 +270,15 @@ class LocalFileStore:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
+                length = self._list_length(conn, key) + 1
                 next_position = self._next_position(conn, key)
                 conn.execute(
                     "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
                     (key, next_position, value),
                 )
-                length = conn.execute(
-                    "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
-                ).fetchone()[0]
+                self._set_list_length(conn, key, length)
                 conn.execute("COMMIT")
-                return int(length)
+                return length
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
@@ -226,6 +287,7 @@ class LocalFileStore:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
+                length = self._list_length(conn, key) + 1
                 first = conn.execute(
                     "SELECT MIN(position) FROM lists WHERE key = ?", (key,)
                 ).fetchone()[0]
@@ -234,20 +296,16 @@ class LocalFileStore:
                     "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
                     (key, position, value),
                 )
-                length = conn.execute(
-                    "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
-                ).fetchone()[0]
+                self._set_list_length(conn, key, length)
                 conn.execute("COMMIT")
-                return int(length)
+                return length
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
 
     def lrange(self, key: str, start: int, end: int) -> list[str]:
         with self._lock, self._connect() as conn:
-            count = int(
-                conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
-            )
+            count = self._read_list_length(conn, key)
 
             if count == 0:
                 return []
@@ -279,14 +337,13 @@ class LocalFileStore:
 
     def llen(self, key: str) -> int:
         with self._lock, self._connect() as conn:
-            return int(
-                conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
-            )
+            return self._read_list_length(conn, key)
 
     def lrem(self, key: str, count: int, value: str) -> int:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
+                length_before = self._list_length(conn, key)
                 rows = conn.execute(
                     "SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC",
                     (key, value),
@@ -302,6 +359,7 @@ class LocalFileStore:
                         f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})",
                         (key, *positions),
                     )
+                self._set_list_length(conn, key, length_before - len(positions))
                 conn.execute("COMMIT")
                 return len(positions)
             except Exception:
@@ -352,6 +410,11 @@ class LocalFileStore:
                 conn.execute("SELECT COUNT(*) FROM sets WHERE key = ?", (key,)).fetchone()[0]
             )
 
+    def smembers(self, key: str) -> set[str]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("SELECT value FROM sets WHERE key = ?", (key,)).fetchall()
+        return {str(row[0]) for row in rows}
+
     def publish(self, channel: str, message: str) -> int:  # noqa: ARG002
         # Cross-process pub/sub is provided by Redis. Local mode relies on the
         # SSE polling fallback because SQLite is only a queue/storage shim.
@@ -395,22 +458,27 @@ class LocalFileStore:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
+                first_length = self._list_length(conn, first_list)
                 row = conn.execute(
                     "SELECT position, value FROM lists WHERE key = ? ORDER BY position ASC LIMIT 1",
                     (first_list,),
                 ).fetchone()
                 if row is None:
+                    self._set_list_length(conn, first_list, 0)
                     conn.execute("COMMIT")
                     return None
                 position, value = row
                 conn.execute(
                     "DELETE FROM lists WHERE key = ? AND position = ?", (first_list, position)
                 )
+                self._set_list_length(conn, first_list, first_length - 1)
+                second_length = self._list_length(conn, second_list) + 1
                 next_position = self._next_position(conn, second_list)
                 conn.execute(
                     "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
                     (second_list, next_position, value),
                 )
+                self._set_list_length(conn, second_list, second_length)
                 conn.execute("COMMIT")
                 return str(value)
             except Exception:
@@ -426,15 +494,18 @@ class LocalFileStore:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
+                length_before = self._list_length(conn, key)
                 row = conn.execute(
                     "SELECT position, value FROM lists WHERE key = ? ORDER BY position ASC LIMIT 1",
                     (key,),
                 ).fetchone()
                 if row is None:
+                    self._set_list_length(conn, key, 0)
                     conn.execute("COMMIT")
                     return None
                 position, value = row
                 conn.execute("DELETE FROM lists WHERE key = ? AND position = ?", (key, position))
+                self._set_list_length(conn, key, length_before - 1)
                 conn.execute("COMMIT")
                 return str(value)
             except Exception:
@@ -447,85 +518,132 @@ class LocalFileStore:
         ).fetchone()
         return int(row[0])
 
-    def _execute_pipeline(self, operations: Iterable[tuple[str, tuple[Any, ...]]]) -> list[Any]:
+    def _read_list_length(self, conn: sqlite3.Connection, key: str) -> int:
+        """Read-only length: counters when present, COUNT for legacy rows."""
+        row = conn.execute(
+            "SELECT length FROM list_lengths WHERE key = ?", (key,)
+        ).fetchone()
+        if row is not None:
+            return int(row[0])
+        return int(
+            conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
+        )
+
+    def _list_length(self, conn: sqlite3.Connection, key: str) -> int:
+        """Return a maintained list length, backfilling once for old databases."""
+        row = conn.execute(
+            "SELECT length FROM list_lengths WHERE key = ?", (key,)
+        ).fetchone()
+        if row is not None:
+            return int(row[0])
+        length = int(
+            conn.execute("SELECT COUNT(*) FROM lists WHERE key = ?", (key,)).fetchone()[0]
+        )
+        conn.execute(
+            "INSERT INTO list_lengths(key, length) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET length = excluded.length",
+            (key, length),
+        )
+        return length
+
+    def _set_list_length(
+        self, conn: sqlite3.Connection, key: str, length: int
+    ) -> int:
+        normalized = max(0, int(length))
+        conn.execute(
+            "INSERT INTO list_lengths(key, length) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET length = excluded.length",
+            (key, normalized),
+        )
+        return normalized
+
+    def _apply_pipeline_operations(
+        self,
+        conn: sqlite3.Connection,
+        operations: Iterable[tuple[str, tuple[Any, ...]]],
+    ) -> list[Any]:
         results: list[Any] = []
+        for name, args in operations:
+            if name == "set":
+                key, value, ex = args
+                expires_at = time.time() + ex if ex else None
+                conn.execute(
+                    "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
+                    (key, value, expires_at),
+                )
+                results.append(True)
+            elif name == "rpush":
+                key, value = args
+                length = self._list_length(conn, str(key)) + 1
+                next_position = self._next_position(conn, str(key))
+                conn.execute(
+                    "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                    (key, next_position, value),
+                )
+                self._set_list_length(conn, str(key), length)
+                results.append(length)
+            elif name == "lpush":
+                key, value = args
+                length = self._list_length(conn, str(key)) + 1
+                first = conn.execute(
+                    "SELECT MIN(position) FROM lists WHERE key = ?", (key,)
+                ).fetchone()[0]
+                position = int(first) - 1 if first is not None else 0
+                conn.execute(
+                    "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
+                    (key, position, value),
+                )
+                self._set_list_length(conn, str(key), length)
+                results.append(length)
+            elif name == "lrem":
+                key, count, value = args
+                length_before = self._list_length(conn, str(key))
+                rows = conn.execute(
+                    "SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC",
+                    (key, value),
+                ).fetchall()
+                positions = [int(row[0]) for row in rows]
+                if count > 0:
+                    positions = positions[: int(count)]
+                elif count < 0:
+                    positions = list(reversed(positions))[0 : abs(int(count))]
+                if positions:
+                    placeholders = ",".join("?" for _ in positions)
+                    conn.execute(
+                        f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})",
+                        (key, *positions),
+                    )
+                self._set_list_length(conn, str(key), length_before - len(positions))
+                results.append(len(positions))
+            elif name in {"sadd", "srem"}:
+                key, *values = args
+                changed = 0
+                for value in values:
+                    if name == "sadd":
+                        cursor = conn.execute(
+                            "INSERT OR IGNORE INTO sets(key, value) VALUES(?, ?)",
+                            (key, value),
+                        )
+                    else:
+                        cursor = conn.execute(
+                            "DELETE FROM sets WHERE key = ? AND value = ?",
+                            (key, value),
+                        )
+                    changed += int(cursor.rowcount or 0)
+                results.append(changed)
+            elif name == "delete":
+                (key,) = args
+                cursor = conn.execute("DELETE FROM kv WHERE key = ?", (key,))
+                results.append(int(cursor.rowcount or 0))
+            else:
+                raise ValueError(f"Unsupported local pipeline operation: {name}")
+        return results
+
+    def _execute_pipeline(self, operations: Iterable[tuple[str, tuple[Any, ...]]]) -> list[Any]:
         with self._lock, self._connect() as conn:
             self._begin_write(conn)
             try:
-                for name, args in operations:
-                    if name == "set":
-                        key, value, ex = args
-                        expires_at = time.time() + ex if ex else None
-                        conn.execute(
-                            "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
-                            (key, value, expires_at),
-                        )
-                        results.append(True)
-                    elif name == "rpush":
-                        key, value = args
-                        next_position = self._next_position(conn, str(key))
-                        conn.execute(
-                            "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
-                            (key, next_position, value),
-                        )
-                        length = conn.execute(
-                            "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
-                        ).fetchone()[0]
-                        results.append(int(length))
-                    elif name == "lpush":
-                        key, value = args
-                        first = conn.execute(
-                            "SELECT MIN(position) FROM lists WHERE key = ?", (key,)
-                        ).fetchone()[0]
-                        position = int(first) - 1 if first is not None else 0
-                        conn.execute(
-                            "INSERT INTO lists(key, position, value) VALUES(?, ?, ?)",
-                            (key, position, value),
-                        )
-                        length = conn.execute(
-                            "SELECT COUNT(*) FROM lists WHERE key = ?", (key,)
-                        ).fetchone()[0]
-                        results.append(int(length))
-                    elif name == "lrem":
-                        key, count, value = args
-                        rows = conn.execute(
-                            "SELECT position FROM lists WHERE key = ? AND value = ? ORDER BY position ASC",
-                            (key, value),
-                        ).fetchall()
-                        positions = [int(row[0]) for row in rows]
-                        if count > 0:
-                            positions = positions[: int(count)]
-                        elif count < 0:
-                            positions = list(reversed(positions))[0 : abs(int(count))]
-                        if positions:
-                            placeholders = ",".join("?" for _ in positions)
-                            conn.execute(
-                                f"DELETE FROM lists WHERE key = ? AND position IN ({placeholders})",
-                                (key, *positions),
-                            )
-                        results.append(len(positions))
-                    elif name in {"sadd", "srem"}:
-                        key, *values = args
-                        changed = 0
-                        for value in values:
-                            if name == "sadd":
-                                cursor = conn.execute(
-                                    "INSERT OR IGNORE INTO sets(key, value) VALUES(?, ?)",
-                                    (key, value),
-                                )
-                            else:
-                                cursor = conn.execute(
-                                    "DELETE FROM sets WHERE key = ? AND value = ?",
-                                    (key, value),
-                                )
-                            changed += int(cursor.rowcount or 0)
-                        results.append(changed)
-                    elif name == "delete":
-                        (key,) = args
-                        cursor = conn.execute("DELETE FROM kv WHERE key = ?", (key,))
-                        results.append(int(cursor.rowcount or 0))
-                    else:
-                        raise ValueError(f"Unsupported local pipeline operation: {name}")
+                results = self._apply_pipeline_operations(conn, operations)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -550,8 +668,10 @@ def _translate_sqlite_errors(method: Any):
 for _method_name in (
     "ping",
     "get",
+    "mget",
     "set",
     "compare_and_set",
+    "compare_and_set_with_ops",
     "delete",
     "rpush",
     "lpush",

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "generate:api": "PYTHONPATH=../src ../venv/bin/python ../scripts/export_openapi.py /tmp/bvc-openapi.json && openapi-typescript /tmp/bvc-openapi.json -o src/generated/api-schema.ts",
+    "generate:api": "node scripts/generate-api.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

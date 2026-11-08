@@ -66,6 +66,61 @@ def test_source_payload_rejects_non_video_extension(tmp_path: Path, monkeypatch:
     assert exc.value.status_code == 422
 
 
+def test_source_payload_rejects_empty_payload() -> None:
+    payload = JobCreateRequest()
+    with pytest.raises(HTTPException) as exc:
+        api._validate_source_payload(payload)
+    assert exc.value.status_code == 422
+
+
+def test_source_payload_rejects_input_filename_traversal(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    (tmp_path / "outside.mp4").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        api,
+        "settings",
+        type("_S", (), {"media_roots": (), "input_dir": input_dir})(),
+    )
+
+    payload = JobCreateRequest(input_filename="../outside.mp4")
+    with pytest.raises(HTTPException) as exc:
+        api._validate_source_payload(payload)
+
+    assert exc.value.status_code == 422
+
+
+def test_source_payload_requires_existing_input_file(tmp_path: Path, monkeypatch: Any) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        api,
+        "settings",
+        type("_S", (), {"media_roots": (), "input_dir": input_dir})(),
+    )
+
+    payload = JobCreateRequest(input_filename="missing.mp4")
+    with pytest.raises(HTTPException) as exc:
+        api._validate_source_payload(payload)
+
+    assert exc.value.status_code == 422
+
+
+def test_source_payload_accepts_existing_input_file(tmp_path: Path, monkeypatch: Any) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    (input_dir / "upload.mp4").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        api,
+        "settings",
+        type("_S", (), {"media_roots": (), "input_dir": input_dir})(),
+    )
+
+    api._validate_source_payload(JobCreateRequest(input_filename="upload.mp4"))
+
+
 def test_source_payload_accepts_valid_video_and_build_job_infers_name(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

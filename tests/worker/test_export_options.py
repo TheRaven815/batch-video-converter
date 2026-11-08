@@ -1,7 +1,7 @@
 from video_converter.worker.main import _resolve_export_options
 
 
-def test_webm_forces_vp9_profile_and_opus_when_audio_copy_selected() -> None:
+def test_webm_forces_vp9_profile_and_keeps_copy_for_compatible_audio() -> None:
     profile, video_export, audio_export, subtitle_export, subtitle_language = (
         _resolve_export_options(
             {
@@ -16,7 +16,7 @@ def test_webm_forces_vp9_profile_and_opus_when_audio_copy_selected() -> None:
 
     assert profile == "vp9_webm"
     assert video_export == "webm"
-    assert audio_export == "opus"
+    assert audio_export == "copy"
     assert subtitle_export == "none"
     assert subtitle_language is None
 

@@ -11,135 +11,7 @@ from video_converter.core.config import JOB_KEY_PREFIX, JOBS_INDEX_KEY, QUEUE_NA
 from video_converter.core.job_repository import JobRepository
 from video_converter.core.models import JobRecord, JobStatus, now_iso
 
-
-class _Pipeline:
-    def __init__(self, redis: "_FakeRedis") -> None:
-        self.redis = redis
-        self.commands: list[tuple[str, tuple[object, ...]]] = []
-
-    def set(self, key: str, value: str, ex: int | None = None) -> "_Pipeline":
-        self.commands.append(("set", (key, value, ex)))
-        return self
-
-    def rpush(self, key: str, value: str) -> "_Pipeline":
-        self.commands.append(("rpush", (key, value)))
-        return self
-
-    def lpush(self, key: str, value: str) -> "_Pipeline":
-        self.commands.append(("lpush", (key, value)))
-        return self
-
-    def lrem(self, key: str, count: int, value: str) -> "_Pipeline":
-        self.commands.append(("lrem", (key, count, value)))
-        return self
-
-    def sadd(self, key: str, *values: str) -> "_Pipeline":
-        self.commands.append(("sadd", (key, *values)))
-        return self
-
-    def srem(self, key: str, *values: str) -> "_Pipeline":
-        self.commands.append(("srem", (key, *values)))
-        return self
-
-    def delete(self, key: str) -> "_Pipeline":
-        self.commands.append(("delete", (key,)))
-        return self
-
-    def execute(self) -> list[object]:
-        results: list[object] = []
-        for name, args in self.commands:
-            results.append(getattr(self.redis, name)(*args))
-        return results
-
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.lists: dict[str, list[str]] = {QUEUE_NAME: [], JOBS_INDEX_KEY: []}
-        self.sets: dict[str, set[str]] = {}
-        self.published: list[tuple[str, str]] = []
-        self.ping_raises = False
-
-    def ping(self) -> bool:
-        if self.ping_raises:
-            raise api.redis.RedisError("redis unavailable")
-        return True
-
-    def pipeline(
-        self, transaction: bool = True
-    ) -> _Pipeline:  # noqa: ARG002 - mirrors redis-py API.
-        return _Pipeline(self)
-
-    def set(
-        self,
-        key: str,
-        value: str,
-        ex: int | None = None,
-        nx: bool = False,
-    ) -> bool:  # noqa: ARG002 - expiration not needed here.
-        if nx and key in self.values:
-            return False
-        self.values[key] = value
-        return True
-
-    def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    def rpush(self, key: str, value: str) -> int:
-        self.lists.setdefault(key, []).append(value)
-        return len(self.lists[key])
-
-    def lpush(self, key: str, value: str) -> int:
-        self.lists.setdefault(key, []).insert(0, value)
-        return len(self.lists[key])
-
-    def lrange(self, key: str, start: int, end: int) -> list[str]:
-        values = self.lists.get(key, [])
-        if end == -1:
-            return values[start:]
-        return values[start : end + 1]
-
-    def llen(self, key: str) -> int:
-        return len(self.lists.get(key, []))
-
-    def lrem(self, key: str, count: int, value: str) -> int:
-        values = self.lists.setdefault(key, [])
-        if count == 0:
-            removed = values.count(value)
-            self.lists[key] = [item for item in values if item != value]
-            return removed
-
-        indexes = [index for index, item in enumerate(values) if item == value]
-        if count > 0:
-            selected = set(indexes[:count])
-        else:
-            selected = set(list(reversed(indexes))[: abs(count)])
-        self.lists[key] = [item for index, item in enumerate(values) if index not in selected]
-        return len(selected)
-
-    def sadd(self, key: str, *values: str) -> int:
-        target = self.sets.setdefault(key, set())
-        before = len(target)
-        target.update(values)
-        return len(target) - before
-
-    def srem(self, key: str, *values: str) -> int:
-        target = self.sets.setdefault(key, set())
-        before = len(target)
-        target.difference_update(values)
-        return before - len(target)
-
-    def scard(self, key: str) -> int:
-        return len(self.sets.get(key, set()))
-
-    def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 0
-
-    def delete(self, key: str) -> int:
-        existed = key in self.values
-        self.values.pop(key, None)
-        return 1 if existed else 0
+from support import FakeRedis as _FakeRedis
 
 
 @pytest.fixture()
@@ -155,6 +27,8 @@ def integration_client(
     data_dir = data_root / "data"
     for path in (media_root, outputs_dir, input_dir, temp_dir, logs_dir, data_dir):
         path.mkdir(parents=True, exist_ok=True)
+    # Legacy/manual job creation validates that the input file exists.
+    (input_dir / "uploaded.mp4").write_text("video", encoding="utf-8")
 
     settings = type(
         "_Settings",

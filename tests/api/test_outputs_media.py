@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException, Response
 
 import video_converter.api.main as api
+import video_converter.api.routers.media as media
 from video_converter.core.config import MediaRoot
 
 
@@ -20,6 +21,7 @@ class _FakeCompletedProcess:
                 "streams": [
                     {
                         "index": 2,
+                        "codec_type": "subtitle",
                         "codec_name": "subrip",
                         "tags": {"language": "eng", "title": "English"},
                     }
@@ -90,6 +92,7 @@ def test_subtitle_probe_uses_short_lived_cache(tmp_path: Path, monkeypatch: Any)
     (media_root / "movie.mkv").write_text("video", encoding="utf-8")
     _patch_settings(monkeypatch, media_root=media_root)
     api._subtitle_probe_cache.clear()
+    media._streams_probe_cache.clear()
 
     calls = 0
 
@@ -98,7 +101,7 @@ def test_subtitle_probe_uses_short_lived_cache(tmp_path: Path, monkeypatch: Any)
         calls += 1
         return _FakeCompletedProcess()
 
-    monkeypatch.setattr(api.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
 
     first = api.probe_media_subtitles(root_key="root", path="movie.mkv")
     second = api.probe_media_subtitles(root_key="root", path="movie.mkv")

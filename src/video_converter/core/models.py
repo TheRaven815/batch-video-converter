@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum, StrEnum
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -17,6 +17,7 @@ class JobStatus(str, Enum):
 
 class ExportProfile(StrEnum):
     h264_mp4 = "h264_mp4"
+    h264_mkv = "h264_mkv"
     h265_mp4 = "h265_mp4"
     vp9_webm = "vp9_webm"
 
@@ -79,14 +80,18 @@ class JobCreateRequest(BaseModel):
     target_video_bitrate: Optional[str] = Field(
         default=None, pattern=r"^\d+(?:[kKmM])?$", max_length=16
     )
-    audio_bitrate_kbps: int = Field(default=128, ge=32, le=512)
+    audio_bitrate_kbps: Optional[int] = Field(default=None, ge=32, le=512)
     resolution: VideoResolution = VideoResolution.original
     encoder_preset: EncoderPreset = EncoderPreset.veryfast
     hardware_acceleration: HardwareAcceleration = HardwareAcceleration.auto
     max_attempts: int = Field(default=3, ge=1, le=10)
     priority: int = Field(default=0, ge=-10, le=10)
-    audio_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
-    subtitle_stream_indexes: Optional[list[int]] = Field(default=None, max_length=8)
+    audio_stream_indexes: Optional[list[Annotated[int, Field(ge=0)]]] = Field(
+        default=None, max_length=8
+    )
+    subtitle_stream_indexes: Optional[list[Annotated[int, Field(ge=0)]]] = Field(
+        default=None, max_length=8
+    )
     audio_channel_mode: Optional[str] = Field(default="preserve", pattern=r"^(preserve|downmix2)$")
     skip_existing_output: bool = False
 
@@ -97,7 +102,7 @@ class JobCreateRequest(BaseModel):
 
 
 class JobBatchCreateRequest(BaseModel):
-    jobs: list[JobCreateRequest] = Field(default_factory=list, min_length=1)
+    jobs: list[JobCreateRequest] = Field(default_factory=list, min_length=1, max_length=500)
 
 
 class JobRecord(BaseModel):
@@ -145,7 +150,7 @@ class JobRecord(BaseModel):
     retry_reason: Optional[str] = Field(default=None, max_length=1000)
     quality_crf: Optional[int] = Field(default=None, ge=0, le=51)
     target_video_bitrate: Optional[str] = Field(default=None, max_length=16)
-    audio_bitrate_kbps: int = Field(default=128, ge=32, le=512)
+    audio_bitrate_kbps: Optional[int] = Field(default=None, ge=32, le=512)
     resolution: VideoResolution = VideoResolution.original
     encoder_preset: EncoderPreset = EncoderPreset.veryfast
     hardware_acceleration: HardwareAcceleration = HardwareAcceleration.auto
@@ -362,6 +367,14 @@ class RetrySettings(BaseModel):
     initial_backoff_seconds: int = Field(default=10, ge=1, le=3600)
     max_backoff_seconds: int = Field(default=300, ge=1, le=86400)
 
+    @model_validator(mode="after")
+    def _validate_backoff_bounds(self) -> "RetrySettings":
+        if self.max_backoff_seconds < self.initial_backoff_seconds:
+            raise ValueError(
+                "max_backoff_seconds must be greater than or equal to initial_backoff_seconds"
+            )
+        return self
+
 
 class DiskSafetySettings(BaseModel):
     minimum_free_bytes: int = Field(default=536_870_912, ge=0)
@@ -379,7 +392,9 @@ class DefaultExportSettings(BaseModel):
     subtitle_export: SubtitleExport = SubtitleExport.none
     subtitle_language: Optional[str] = Field(default=None, max_length=32)
     quality_crf: Optional[int] = Field(default=None, ge=0, le=51)
-    target_video_bitrate: Optional[str] = Field(default=None, max_length=16)
+    target_video_bitrate: Optional[str] = Field(
+        default=None, pattern=r"^\d+(?:[kKmM])?$", max_length=16
+    )
     audio_bitrate_kbps: Optional[int] = Field(default=None, ge=32, le=512)
     resolution: Optional[VideoResolution] = None
     encoder_preset: Optional[EncoderPreset] = None

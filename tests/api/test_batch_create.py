@@ -11,22 +11,7 @@ import video_converter.api.main as api
 from video_converter.core.config import MediaRoot
 from video_converter.core.models import JobBatchCreateRequest, JobCreateRequest
 
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
-        if nx and key in self.values:
-            return False
-        self.values[key] = value
-        return True
-
-    def delete(self, key: str) -> int:
-        return int(self.values.pop(key, None) is not None)
+from support import FakeRedis as _FakeRedis
 
 
 class _CapturingJobRepository:
@@ -257,3 +242,8 @@ def test_validate_jobs_reports_item_level_errors(tmp_path: Path, monkeypatch: An
     assert result.items[0].valid is True
     assert result.items[1].valid is False
     assert result.items[1].error_code == "unsupported_extension"
+
+def test_batch_request_is_bounded_to_prevent_memory_abuse() -> None:
+    jobs = [JobCreateRequest(input_filename=f"clip-{index}.mp4") for index in range(501)]
+    with pytest.raises(ValidationError):
+        JobBatchCreateRequest(jobs=jobs)

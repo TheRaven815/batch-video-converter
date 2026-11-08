@@ -116,26 +116,96 @@ def test_missing_subtitles_persist_completed_warning(runtime, monkeypatch, strea
     assert (settings.outputs_dir / result.output_filename).read_bytes() == b"completed-video"
 
 
-@pytest.mark.parametrize("sidecar_failure", ["exit", "missing", "timeout", "executable"])
+@pytest.mark.parametrize("sidecar_failure", ["exit", "missing", "executable", "cancelled"])
 def test_srt_failure_keeps_published_video(runtime, monkeypatch, sidecar_failure):
     _store, repo, settings = runtime
     monkeypatch.setattr(worker, "_probe_subtitle_streams", lambda _path: STREAMS)
     monkeypatch.setattr(worker, "_run_ffmpeg_with_progress", video_success)
-    def sidecar(command, **_kwargs):
+    def sidecar(_job_id, _input, indexes, targets):
+        assert len(indexes) == len(targets) == 1
+        assert indexes == [3]
         assert (settings.outputs_dir / worker._build_output_path(settings.input_dir / "clip.mkv", "mp4", "p1-job").name).exists()
-        assert command[command.index("-map") + 1] == "0:3"
-        if sidecar_failure == "timeout":
-            raise subprocess.TimeoutExpired(command, 1800)
+        if sidecar_failure == "cancelled":
+            raise worker._SubtitleExtractionCancelled("SRT export cancelled")
         if sidecar_failure == "executable":
             raise FileNotFoundError("ffmpeg unavailable")
-        return subprocess.CompletedProcess(command, 1 if sidecar_failure == "exit" else 0, stderr="subtitle failure")
-    monkeypatch.setattr(worker.subprocess, "run", sidecar)
+        if sidecar_failure == "exit":
+            raise RuntimeError("subtitle failure")
+        # "missing": the pass "succeeded" but produced no usable SRT.
+    monkeypatch.setattr(worker, "_extract_subtitle_sidecars", sidecar)
     record = enqueue(repo, subtitle_export="separate_srt", subtitle_stream_indexes=[3])
     worker.process_job(record.id)
     result = repo.get(record.id)
-    assert result.status == JobStatus.completed and "SRT export failed" in result.warnings[0]
-    assert (settings.outputs_dir / result.output_filename).read_bytes() == b"completed-video"
+    if sidecar_failure == "cancelled":
+        assert result.status == JobStatus.cancelled
+    else:
+        assert result.status == JobStatus.completed and "SRT export failed" in result.warnings[0]
+        assert (settings.outputs_dir / result.output_filename).read_bytes() == b"completed-video"
     assert list(settings.temp_dir.iterdir()) == []
+
+
+class _FakeProc:
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+        self.terminated = False
+
+    def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.terminated = True
+
+
+class _StuckProc(_FakeProc):
+    def wait(self, timeout: float | None = None) -> int:
+        if timeout is None:
+            return self.returncode
+        raise subprocess.TimeoutExpired("ffmpeg", timeout)
+
+
+def test_extract_subtitle_sidecars_uses_one_ffmpeg_pass(runtime, monkeypatch):
+    _store, _repo, settings = runtime
+    captured: dict[str, list[str]] = {}
+
+    def fake_popen(command, **kwargs):  # noqa: ARG001
+        captured["command"] = list(command)
+        return _FakeProc(0)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(worker, "_is_cancel_requested", lambda _job_id: False)
+    worker._extract_subtitle_sidecars(
+        "job",
+        Path("input.mkv"),
+        [2, 4],
+        [settings.temp_dir / "a.srt", settings.temp_dir / "b.srt"],
+    )
+
+    command = captured["command"]
+    maps = [command[index + 1] for index, part in enumerate(command) if part == "-map"]
+    assert maps == ["0:2", "0:4"]
+    assert command.count("ffmpeg") == 1
+
+
+def test_extract_subtitle_sidecars_times_out(runtime, monkeypatch):
+    _store, _repo, _settings = runtime
+    monkeypatch.setattr(worker.subprocess, "Popen", lambda *_a, **_kw: _StuckProc())
+    monkeypatch.setattr(worker, "_is_cancel_requested", lambda _job_id: False)
+    ticks = iter([0.0, 10_000.0])
+    monkeypatch.setattr(worker.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        worker._extract_subtitle_sidecars("job", Path("input.mkv"), [2], [Path("out.srt")])
+
+
+def test_extract_subtitle_sidecars_honours_cancel(runtime, monkeypatch):
+    _store, _repo, _settings = runtime
+    monkeypatch.setattr(worker, "_is_cancel_requested", lambda _job_id: True)
+
+    with pytest.raises(worker._SubtitleExtractionCancelled):
+        worker._extract_subtitle_sidecars("job", Path("input.mkv"), [2], [Path("out.srt")])
 
 
 @pytest.mark.parametrize("fallback", ["hardware", "copy"])
